@@ -69,6 +69,18 @@ class MasterOrchestrator:
             
         print("[System] Swarm Engine Online and Ready to route.\n")
 
+    def stream_progress(self, status: str, message: str):
+        """Broadcasts Swarm progress to all active WebSocket clients thread-safely."""
+        import asyncio
+        from app.utils import loop as loop_module
+        from app.services.websocket_manager import websocket_manager
+        
+        print(f"[Swarm Broadcast] Status: {status} | Msg: {message}", flush=True)
+        
+        if loop_module.main_loop and loop_module.main_loop.is_running():
+            coro = websocket_manager.broadcast_ai_status(status, message)
+            asyncio.run_coroutine_threadsafe(coro, loop_module.main_loop)
+
     def run_llm(self, prompt: str) -> str:
         """Utility: All agents pass their prompts through this single brain."""
         if not getattr(self, "model", None) or not getattr(self, "tokenizer", None):
@@ -113,26 +125,6 @@ class MasterOrchestrator:
             response += text_chunk
         return response.strip()
     
-#     def input_agent(self, raw_sensor_json: dict) -> str:
-#         """Agent 1: Translates raw Arduino/Modulino telemetry into a semantic text alert."""
-#         print("[Input Agent] Ingesting raw hardware telemetry...")
-        
-#         prompt = f"""<|system|>
-# You are a factory IoT translation agent. 
-# Read the raw Arduino Modulino sensor data and write a single, professional 1-sentence alert describing the anomaly.
-# Do not include any other text.<|end|>
-# <|user|>
-# RAW DATA: {{"device": "Arduino_Edge_1", "location": "PACVD_Chamber", "thermo_celsius": 88.5, "knob_value": 90}}
-# <|assistant|>
-# ALERT: Critical temperature spike to 88.5°C detected in PACVD Chamber, accompanied by high valve pressure (Knob: 90).<|end|>
-# <|user|>
-# RAW DATA: {raw_sensor_json}<|end|>
-# <|assistant|>"""
-        
-#         translated_alert = self.run_llm(prompt)
-#         print(f"[Input Agent] Translated to: {translated_alert}")
-#         return translated_alert
-
     def input_agent(self, payload: dict) -> str:
         """
         Agent 1: Ingests Telemetry, Audio, or Images and normalizes them into text.
@@ -149,6 +141,7 @@ class MasterOrchestrator:
         # MODALITY 1: RAW TELEMETRY (JSON)
         # ----------------------------------------
         if payload_type == "telemetry":
+            self.stream_progress("analyzing", "Swarm: Input Agent translating raw IoT telemetry...")
             print("[Input Agent] Processing IoT Telemetry...")
             raw_data = payload.get("data", {})
             prompt = f"""<|system|>
@@ -172,6 +165,7 @@ RAW DATA: {raw_data}<|end|>
         # MODALITY 2: AUDIO (Voice Memos)
         # ----------------------------------------
         elif payload_type == "audio":
+            self.stream_progress("analyzing", "Swarm: Input Agent transcribing worker voice memo (Whisper)...")
             print("[Input Agent] Transcribing Worker Audio Memo...")
             audio_file_path = payload.get("data")
             
@@ -203,6 +197,7 @@ VOICE MEMO: {transcription}<|end|>
         # MODALITY 3: IMAGES (Camera Photos via BLIP)
         # ----------------------------------------
         elif payload_type == "image":
+            self.stream_progress("analyzing", "Swarm: Input Agent analyzing machine photo (BLIP)...")
             print("[Input Agent] Analyzing Worker Photo (BLIP)...")
             
             if not getattr(self, 'vision_model', None):
@@ -236,6 +231,7 @@ VISUAL FINDINGS: {vision_analysis}<|end|>
         # MODALITY 4: SENSOR FUSION (All at once!)
         # ----------------------------------------
         elif payload_type == "combined":
+            self.stream_progress("analyzing", "Swarm: Input Agent initiating multi-modal sensor fusion...")
             print("\n[Input Agent] 🌪️ INITIATING MULTI-MODAL SENSOR FUSION 🌪️")
             combined_data = payload.get("data", {})
             
@@ -248,6 +244,7 @@ VISUAL FINDINGS: {vision_analysis}<|end|>
             audio_text = "No audio provided."
             import os
             if audio_path and getattr(self, 'audio_model', None) and os.path.exists(audio_path):
+                self.stream_progress("analyzing", "Swarm: Input Agent transcribing audio memo...")
                 print("[Input Agent] Transcribing Audio...")
                 factory_jargon = "TDMAT, PACVD, Lithography, Inductively Coupled Plasma, RIE, Etcher, Sub-threshold leakage, Modulino, ChromaDB"
                 segments, _ = self.audio_model.transcribe(audio_path, beam_size=5, initial_prompt=factory_jargon)
@@ -258,6 +255,7 @@ VISUAL FINDINGS: {vision_analysis}<|end|>
             image_path = combined_data.get("image")
             vision_text = "No image provided."
             if image_path and getattr(self, 'vision_model', None) and os.path.exists(image_path):
+                self.stream_progress("analyzing", "Swarm: Input Agent captioning camera photo...")
                 print("[Input Agent] Analyzing Image...")
                 raw_image = Image.open(image_path).convert('RGB')
                 inputs = self.vision_processor(raw_image, return_tensors="pt")
@@ -266,6 +264,7 @@ VISUAL FINDINGS: {vision_analysis}<|end|>
                 print(f"[Input Agent] Vision Caption: '{vision_text}'")
                 
             # 4. SENSOR FUSION: Phi-3 synthesizes all 3 inputs into ONE alert
+            self.stream_progress("analyzing", "Swarm: Input Agent synthesizing modalities into unified alert...")
             print("[Input Agent] Synthesizing all modalities into a single semantic alert...")
             prompt = f"""<|system|>
 You are a Senior Semiconductor Defect Synthesizer. 
@@ -287,6 +286,7 @@ VISUAL CAPTION: {vision_text}<|end|>
         
     def supervisor_agent(self, clean_data: str) -> str:
         """Agent 2: Routes the alert to the correct domain department."""
+        self.stream_progress("analyzing", "Swarm: Supervisor Agent evaluating alert for domain routing...")
         print("[Supervisor] Analyzing payload for routing...")
         
         clean_upper = clean_data.upper()
@@ -312,10 +312,12 @@ VISUAL CAPTION: {vision_text}<|end|>
         
         # If it found at least one match, route it!
         if scores[best_domain] > 0:
+            self.stream_progress("analyzing", f"Swarm: Supervisor routed alert to {best_domain} expert via keywords.")
             print(f"[Supervisor] Keyword Match Routing to {best_domain} Expert. (Scores: {scores})")
             return best_domain
             
         # --- METHOD 2: FEW-SHOT AI ROUTING (Fallback if score is 0) ---
+        self.stream_progress("analyzing", "Swarm: Supervisor falling back to AI classification...")
         prompt = f"""<|system|>
 You are a strict factory routing API. Classify the alert into EXACTLY ONE of these categories based on definitions:
 1. LITHOGRAPHY: Issues with light, photoresist, or etching.
@@ -341,23 +343,19 @@ ALERT: {clean_data}<|end|>
             print("[Supervisor] Warning: Swarm AI routing failed or offline. Defaulting to QUALITY domain expert.")
             final_route = "QUALITY"
             
+        self.stream_progress("analyzing", f"Swarm: Routed to {final_route} domain expert.")
         print(f"[Supervisor] Route Result -> Routing to {final_route} Expert.")
         return final_route
+
     def domain_expert_agent(self, domain: str, sensor_text: str, raw_telemetry: dict = None) -> str:
         """Agents 4-7: Dynamically adapts based on Supervisor's route and raw data."""
+        self.stream_progress("analyzing", f"Swarm: {domain} Expert searching manuals in ChromaDB vector database...")
         print(f"[Agent {domain}] Searching {domain} Vector Database for similar failures...")
         
         collection = self.collections.get(domain)
         if not collection:
             return json.dumps({"error": f"Knowledge base for {domain} not found."})
 
-        # # We search ChromaDB using the semantic text
-        # results = collection.query(query_texts=[sensor_text], n_results=2)
-        # context = ""
-        # if results['documents']:
-        #     for doc in results['documents'][0]:
-        #         context += doc + "\n\n"
-                
         # We search ChromaDB using the semantic text
         results = collection.query(query_texts=[sensor_text], n_results=2)
         context = ""
@@ -405,6 +403,7 @@ SEMANTIC ALERT:
 Analyze the data against the context and output the strict JSON.<|end|>
 <|assistant|>"""
         
+        self.stream_progress("analyzing", f"Swarm: {domain} Expert running diagnostic LLM reasoning...")
         print(f"[Agent {domain}] Generating JSON Diagnosis...")
         raw_output = self.run_llm(prompt)
         
@@ -436,10 +435,11 @@ Analyze the data against the context and output the strict JSON.<|end|>
  
     def process_factory_alert(self, incoming_payload: dict) -> dict:
         """The main entry point for the FastAPI backend matching Contract v1.0."""
+        req_id = incoming_payload.get("request_id", "REQ-UNKNOWN")
+        self.stream_progress("analyzing", f"Swarm: Initializing collaborative safety diagnostics for {req_id}...")
         print("\n" + "="*60)
         
         # 1. Extract API Contract tracking data
-        req_id = incoming_payload.get("request_id", "REQ-UNKNOWN")
         payload_type = incoming_payload.get("type", "unknown")
         raw_data = incoming_payload.get("data", {})
         
@@ -488,6 +488,7 @@ Analyze the data against the context and output the strict JSON.<|end|>
                 }
             }
             
+            self.stream_progress("monitoring", f"Swarm: Safety check complete. Risk: {ai_intelligence.get('level', 'MEDIUM')} | {ai_intelligence.get('summary')}")
             print(f"\n--- CONTRACT V1.0 OUTPUT DELIVERED FOR {req_id} ---")
             return final_response
 

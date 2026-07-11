@@ -214,6 +214,9 @@ async def read_serial_data():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Store the main running event loop for thread-safe websocket streaming
+    from app.utils import loop as loop_module
+    loop_module.main_loop = asyncio.get_running_loop()
     
     # Start the Arduino Serial Reader Task
     serial_task = asyncio.create_task(read_serial_data())
