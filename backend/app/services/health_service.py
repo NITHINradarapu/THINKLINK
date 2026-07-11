@@ -52,16 +52,9 @@ class HealthService:
 
         try:
 
-            response = requests.get(
-                self.ai_health_url,
-                timeout=self.ai_timeout,
-            )
-
-            if response.status_code == 200:
-
-                return "UP"
-
-            return "DOWN"
+            from app.services.master_orchestrator_service import get_master_orchestrator
+            orchestrator = get_master_orchestrator()
+            return "UP" if orchestrator is not None else "DOWN"
 
         except Exception:
 
