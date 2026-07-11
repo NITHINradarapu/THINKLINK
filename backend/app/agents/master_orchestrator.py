@@ -114,9 +114,11 @@ class MasterOrchestrator:
         output_generator.append_tokens(input_tokens)
         
         response = ""
-        while not output_generator.is_done():
+        token_count = 0
+        while not output_generator.is_done() and token_count < 150:
             output_generator.generate_next_token()
             new_token = output_generator.get_next_tokens()[0]
+            token_count += 1
             if new_token in [32000, 32001, 32007]: # Phi-3 special tokens
                 break
             text_chunk = self.tokenizer.decode([new_token])
