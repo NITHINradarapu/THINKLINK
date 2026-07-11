@@ -177,3 +177,14 @@ export interface ValidationError {
 export interface HTTPValidationError {
   detail: ValidationError[];
 }
+
+// ─── Worker Report ───────────────────────────────────────────
+
+export interface ReportResponse {
+  success: boolean;
+  incident_id: string;
+  risk_level: string;
+  summary: string;
+  notification_sent: boolean;
+}
+

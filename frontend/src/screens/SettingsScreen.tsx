@@ -56,12 +56,12 @@ export default function SettingsScreen() {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
     setLoadingAction(label);
     try {
-      const response = await fetch(`${serverIp}${path}`);
+      const response = await fetch(`${apiBaseUrl}${path}`);
       const data = await response.json();
       console.log(`Simulation response:`, data);
     } catch (error) {
       console.error(error);
-      Alert.alert('Connection Error', `Failed to send trigger to ${serverIp}${path}. Make sure the Snapdragon AI PC mock server is running.`);
+      Alert.alert('Connection Error', `Failed to send trigger to ${apiBaseUrl}${path}. Make sure the Snapdragon AI PC FastAPI server is running.`);
     } finally {
       setLoadingAction(null);
     }

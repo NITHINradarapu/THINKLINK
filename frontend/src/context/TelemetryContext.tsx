@@ -101,6 +101,9 @@ interface TelemetryContextProps {
   resolveIncidentById: (incidentId: string) => Promise<void>;
   checkBackendHealth: () => Promise<boolean>;
   analyzeWithAI: (params: { telemetry?: string; image?: any; audio?: any }) => Promise<any>;
+  submitReport: (params: { device_id: string; worker_id: string; remarks?: string; image: any; audio?: any }) => Promise<any>;
+  getDeviceDetails: (id: string) => Promise<any>;
+  getDeviceHistoryList: (id: string) => Promise<any>;
 }
 
 const TelemetryContext = createContext<TelemetryContextProps | undefined>(undefined);
@@ -188,6 +191,7 @@ export function TelemetryProvider({ children }: { children: React.ReactNode }) {
   const [latestNotification, setLatestNotification] = useState<NotificationPayload | null>(null);
 
   const wsRef = useRef<WebSocket | null>(null);
+  const dismissedIncidentIdRef = useRef<string | null>(null);
 
   // ────────────────────────────────────────────────────────
   // 1. Native WebSocket connection (real-time telemetry channel)
@@ -364,8 +368,10 @@ export function TelemetryProvider({ children }: { children: React.ReactNode }) {
       if (activeIncidents.status === 'fulfilled' && Array.isArray(activeIncidents.value)) {
         if (activeIncidents.value.length > 0) {
           const latestActive = mapIncidentResponseToReport(activeIncidents.value[0]);
-          setActiveIncident(latestActive);
-          setAiStatus({ status: 'analyzing', latestEvent: `Active incident: ${latestActive.title}` });
+          if (latestActive.id !== dismissedIncidentIdRef.current) {
+            setActiveIncident(latestActive);
+            setAiStatus({ status: 'analyzing', latestEvent: `Active incident: ${latestActive.title}` });
+          }
         } else {
           // No active incidents from backend
           // Only clear if we don't have a socket-pushed incident
@@ -458,8 +464,11 @@ export function TelemetryProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const clearActiveIncident = useCallback(() => {
+    if (activeIncident) {
+      dismissedIncidentIdRef.current = activeIncident.id;
+    }
     setActiveIncident(null);
-  }, []);
+  }, [activeIncident]);
 
   // Resolve incident via backend API
   const resolveIncidentById = useCallback(async (incidentId: string) => {
@@ -475,16 +484,9 @@ export function TelemetryProvider({ children }: { children: React.ReactNode }) {
       }, 4000);
     } catch (err) {
       console.error('[API] Failed to resolve incident:', err);
-      // Fallback: try the mock server reset endpoint
-      try {
-        await fetch(`${serverIp}/trigger/reset`);
-        setActiveIncident(null);
-        setAiStatus({ status: 'resolved', latestEvent: 'Incident resolved (via mock server).' });
-      } catch {
-        throw err; // Re-throw original error
-      }
+      throw err;
     }
-  }, [serverIp, refreshIncidents]);
+  }, [refreshIncidents]);
 
   // AI multimodal analysis
   const analyzeWithAI = useCallback(async (params: { telemetry?: string; image?: any; audio?: any }) => {
@@ -500,6 +502,36 @@ export function TelemetryProvider({ children }: { children: React.ReactNode }) {
       throw err;
     }
   }, [refreshIncidents]);
+
+  // Submit worker report
+  const submitReport = useCallback(async (params: {
+    device_id: string;
+    worker_id: string;
+    remarks?: string;
+    image: any;
+    audio?: any;
+  }) => {
+    try {
+      setAiStatus({ status: 'analyzing', latestEvent: 'Submitting worker incident report...' });
+      const result = await api.submitReport(params);
+      setAiStatus({ status: 'resolved', latestEvent: 'Worker report processed successfully.' });
+      await refreshIncidents();
+      return result;
+    } catch (err) {
+      setAiStatus({ status: 'monitoring', latestEvent: 'Failed to submit worker report.' });
+      throw err;
+    }
+  }, [refreshIncidents]);
+
+  // Fetch single device details
+  const getDeviceDetails = useCallback(async (id: string) => {
+    return await api.getDevice(id);
+  }, []);
+
+  // Fetch device history list
+  const getDeviceHistoryList = useCallback(async (id: string) => {
+    return await api.getDeviceHistory(id);
+  }, []);
 
   // ────────────────────────────────────────────────────────
   // 5. Provide Context
@@ -534,6 +566,9 @@ export function TelemetryProvider({ children }: { children: React.ReactNode }) {
       resolveIncidentById,
       checkBackendHealth,
       analyzeWithAI,
+      submitReport,
+      getDeviceDetails,
+      getDeviceHistoryList,
     }}>
       {children}
     </TelemetryContext.Provider>

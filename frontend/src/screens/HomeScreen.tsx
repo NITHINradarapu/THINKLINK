@@ -1,5 +1,5 @@
 import React, { useEffect, useRef } from 'react';
-import { StyleSheet, Text, View, SafeAreaView, ScrollView, TouchableOpacity, Animated, RefreshControl } from 'react-native';
+import { StyleSheet, Text, View, SafeAreaView, ScrollView, TouchableOpacity, Animated, RefreshControl, Modal, ActivityIndicator } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { COLORS, TYPOGRAPHY, SPACING } from '../theme/theme';
@@ -20,9 +20,58 @@ export default function HomeScreen() {
     latestNotification,
     refreshDashboard,
     refreshIncidents,
+    getDeviceDetails,
+    getDeviceHistoryList,
   } = useTelemetry();
 
   const [refreshing, setRefreshing] = React.useState(false);
+
+  // Device History Modal states
+  const [isDeviceHistoryModalVisible, setIsDeviceHistoryModalVisible] = React.useState(false);
+  const [deviceDetails, setDeviceDetails] = React.useState<any>(null);
+  const [deviceHistory, setDeviceHistory] = React.useState<any[]>([]);
+  const [loadingDeviceData, setLoadingDeviceData] = React.useState(false);
+
+  const handleOpenDeviceHistory = async (deviceId: string) => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
+    setIsDeviceHistoryModalVisible(true);
+    setLoadingDeviceData(true);
+    setDeviceDetails(null);
+    setDeviceHistory([]);
+    try {
+      if (backendConnected) {
+        const details = await getDeviceDetails(deviceId);
+        const historyList = await getDeviceHistoryList(deviceId);
+        setDeviceDetails(details);
+        setDeviceHistory(historyList);
+      } else {
+        // Fallback mock values
+        setDeviceDetails({
+          device_id: deviceId,
+          device_type: 'ARDUINO',
+          status: connections.arduino ? 'online' : 'offline',
+          last_seen: new Date().toISOString(),
+          latest_telemetry: {
+            temperature: sensorData.temperature,
+            humidity: sensorData.humidity,
+            gas_level: sensorData.gas,
+            smoke_detected: sensorData.smoke_detected,
+            battery_level: sensorData.battery_level || 98
+          }
+        });
+        setDeviceHistory([
+          { timestamp: new Date(Date.now() - 3000).toISOString(), temperature: 23.4, humidity: 48.0, gas_level: 110.0, smoke_detected: false, battery_level: 98 },
+          { timestamp: new Date(Date.now() - 6000).toISOString(), temperature: 23.5, humidity: 48.2, gas_level: 108.0, smoke_detected: false, battery_level: 98 },
+          { timestamp: new Date(Date.now() - 9000).toISOString(), temperature: 23.5, humidity: 48.1, gas_level: 112.0, smoke_detected: false, battery_level: 98 },
+          { timestamp: new Date(Date.now() - 12000).toISOString(), temperature: 23.6, humidity: 47.9, gas_level: 115.0, smoke_detected: false, battery_level: 98 },
+        ]);
+      }
+    } catch (err) {
+      console.error('Failed to load device data:', err);
+    } finally {
+      setLoadingDeviceData(false);
+    }
+  };
 
   // Animation for pulsing glow
   const pulseAnim = useRef(new Animated.Value(0.4)).current;
@@ -210,7 +259,10 @@ export default function HomeScreen() {
           </View>
 
           {/* Arduino Card */}
-          <View style={styles.linkCard}>
+          <TouchableOpacity 
+            style={styles.linkCard}
+            onPress={() => handleOpenDeviceHistory('TEST-ARDUINO-01')}
+          >
             <View style={[styles.linkIconBg, { backgroundColor: connections.arduino ? COLORS.success + '15' : COLORS.surfaceLight }]}>
               <Ionicons name="hardware-chip-outline" size={20} color={connections.arduino ? COLORS.success : COLORS.textTertiary} />
             </View>
@@ -221,7 +273,7 @@ export default function HomeScreen() {
                 {connections.arduino ? 'Syncing' : 'Offline'}
               </Text>
             </View>
-          </View>
+          </TouchableOpacity>
 
           {/* Smart Glasses Card */}
           <View style={styles.linkCard}>
@@ -360,6 +412,109 @@ export default function HomeScreen() {
         </View>
 
       </ScrollView>
+
+      {/* DEVICE HISTORY MODAL */}
+      <Modal
+        animationType="slide"
+        transparent={true}
+        visible={isDeviceHistoryModalVisible}
+        onRequestClose={() => setIsDeviceHistoryModalVisible(false)}
+      >
+        <View style={styles.modalContainer}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Device Telemetry & Logs</Text>
+              <TouchableOpacity
+                onPress={() => {
+                  Haptics.selectionAsync().catch(() => {});
+                  setIsDeviceHistoryModalVisible(false);
+                }}
+              >
+                <Ionicons name="close-circle-outline" size={24} color={COLORS.textSecondary} />
+              </TouchableOpacity>
+            </View>
+
+            {loadingDeviceData ? (
+              <View style={styles.modalLoading}>
+                <ActivityIndicator size="large" color={COLORS.primary} />
+                <Text style={styles.modalLoadingText}>Fetching device logs...</Text>
+              </View>
+            ) : (
+              <ScrollView showsVerticalScrollIndicator={false}>
+                {deviceDetails && (
+                  <View style={styles.deviceDetailsCard}>
+                    <View style={styles.detailHeader}>
+                      <Text style={styles.deviceName}>{deviceDetails.device_id}</Text>
+                      <View style={[styles.statusBadge, { 
+                        backgroundColor: deviceDetails.status === 'online' || deviceDetails.status === 'active' ? COLORS.successGlow : COLORS.dangerGlow,
+                        borderColor: deviceDetails.status === 'online' || deviceDetails.status === 'active' ? COLORS.success : COLORS.danger
+                      }]}>
+                        <Text style={[styles.statusBadgeText, { 
+                          color: deviceDetails.status === 'online' || deviceDetails.status === 'active' ? COLORS.success : COLORS.danger
+                        }]}>
+                          {(deviceDetails.status || 'ONLINE').toUpperCase()}
+                        </Text>
+                      </View>
+                    </View>
+
+                    <View style={styles.detailGrid}>
+                      <View style={styles.detailItem}>
+                        <Text style={styles.detailLabel}>TYPE</Text>
+                        <Text style={styles.detailVal}>{deviceDetails.device_type || 'ARDUINO'}</Text>
+                      </View>
+                      <View style={styles.detailItem}>
+                        <Text style={styles.detailLabel}>BATTERY</Text>
+                        <Text style={styles.detailVal}>
+                          {deviceDetails.latest_telemetry?.battery_level ?? deviceDetails.battery_level ?? 'N/A'}%
+                        </Text>
+                      </View>
+                      <View style={styles.detailItem}>
+                        <Text style={styles.detailLabel}>LAST SEEN</Text>
+                        <Text style={styles.detailVal} numberOfLines={1}>
+                          {deviceDetails.last_seen ? new Date(deviceDetails.last_seen).toLocaleTimeString() : 'Just now'}
+                        </Text>
+                      </View>
+                    </View>
+                  </View>
+                )}
+
+                <Text style={styles.historyTitle}>Rolling Telemetry History</Text>
+                
+                {deviceHistory.length === 0 ? (
+                  <View style={styles.emptyHistory}>
+                    <Ionicons name="file-tray-outline" size={28} color={COLORS.textTertiary} />
+                    <Text style={styles.emptyHistoryText}>No telemetry history available</Text>
+                  </View>
+                ) : (
+                  deviceHistory.map((item, index) => (
+                    <View key={index} style={styles.historyRow}>
+                      <View style={styles.historyTimeCol}>
+                        <Text style={styles.historyRowTime}>
+                          {item.timestamp ? new Date(item.timestamp).toLocaleTimeString() : 'N/A'}
+                        </Text>
+                      </View>
+                      <View style={styles.historyDataCol}>
+                        <View style={styles.dataBadge}>
+                          <Text style={styles.dataLabel}>Temp: </Text>
+                          <Text style={styles.dataValue}>{item.temperature?.toFixed(1) ?? 'N/A'}°C</Text>
+                        </View>
+                        <View style={styles.dataBadge}>
+                          <Text style={styles.dataLabel}>Gas: </Text>
+                          <Text style={styles.dataValue}>{item.gas_level?.toFixed(0) ?? item.gas ?? 'N/A'} PPM</Text>
+                        </View>
+                        <View style={styles.dataBadge}>
+                          <Text style={styles.dataLabel}>Hum: </Text>
+                          <Text style={styles.dataValue}>{item.humidity?.toFixed(0) ?? 'N/A'}%</Text>
+                        </View>
+                      </View>
+                    </View>
+                  ))
+                )}
+              </ScrollView>
+            )}
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -701,5 +856,150 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontFamily: 'monospace',
     marginTop: 4,
+  },
+  modalContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'rgba(0, 0, 0, 0.65)',
+    padding: SPACING.md,
+  },
+  modalContent: {
+    width: '100%',
+    maxWidth: 440,
+    backgroundColor: COLORS.surface,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    padding: SPACING.lg,
+    maxHeight: '85%',
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: SPACING.md,
+  },
+  modalTitle: {
+    ...TYPOGRAPHY.h3,
+    fontWeight: 'bold',
+    color: COLORS.textPrimary,
+  },
+  modalLoading: {
+    padding: SPACING.xl,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  modalLoadingText: {
+    ...TYPOGRAPHY.bodySecondary,
+    color: COLORS.textTertiary,
+    marginTop: SPACING.sm,
+  },
+  deviceDetailsCard: {
+    backgroundColor: COLORS.surfaceLight,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    borderRadius: 12,
+    padding: SPACING.md,
+    marginBottom: SPACING.md,
+  },
+  detailHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: SPACING.sm,
+  },
+  deviceName: {
+    fontSize: 15,
+    fontWeight: 'bold',
+    color: COLORS.textPrimary,
+  },
+  statusBadge: {
+    borderWidth: 1,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 4,
+  },
+  statusBadgeText: {
+    fontSize: 9,
+    fontWeight: 'bold',
+  },
+  detailGrid: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+  },
+  detailItem: {
+    flex: 1,
+  },
+  detailLabel: {
+    fontSize: 8,
+    color: COLORS.textTertiary,
+    fontWeight: 'bold',
+    marginBottom: 2,
+  },
+  detailVal: {
+    fontSize: 12,
+    color: COLORS.textPrimary,
+    fontWeight: '600',
+  },
+  historyTitle: {
+    fontSize: 12,
+    fontWeight: 'bold',
+    color: COLORS.textSecondary,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+    marginBottom: SPACING.sm,
+  },
+  emptyHistory: {
+    alignItems: 'center',
+    padding: SPACING.lg,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    borderStyle: 'dashed',
+    borderRadius: 8,
+  },
+  emptyHistoryText: {
+    fontSize: 11,
+    color: COLORS.textTertiary,
+    marginTop: 4,
+  },
+  historyRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: SPACING.sm,
+    borderBottomWidth: 1,
+    borderBottomColor: COLORS.border,
+  },
+  historyTimeCol: {
+    width: 65,
+  },
+  historyRowTime: {
+    fontSize: 10,
+    color: COLORS.textSecondary,
+    fontFamily: 'monospace',
+  },
+  historyDataCol: {
+    flex: 1,
+    flexDirection: 'row',
+    gap: SPACING.xs,
+    justifyContent: 'flex-end',
+  },
+  dataBadge: {
+    flexDirection: 'row',
+    backgroundColor: COLORS.surfaceLight,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    paddingHorizontal: 5,
+    paddingVertical: 2,
+    borderRadius: 4,
+  },
+  dataLabel: {
+    fontSize: 8,
+    color: COLORS.textTertiary,
+  },
+  dataValue: {
+    fontSize: 8,
+    fontWeight: 'bold',
+    color: COLORS.textPrimary,
   },
 });

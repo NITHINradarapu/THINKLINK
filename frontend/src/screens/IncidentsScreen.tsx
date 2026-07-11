@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { StyleSheet, Text, View, SafeAreaView, ScrollView, TouchableOpacity, LayoutAnimation, Platform, UIManager, RefreshControl } from 'react-native';
+import { StyleSheet, Text, View, SafeAreaView, ScrollView, TouchableOpacity, LayoutAnimation, Platform, UIManager, RefreshControl, Modal, TextInput, Alert, ActivityIndicator, Switch } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { COLORS, SPACING, TYPOGRAPHY } from '../theme/theme';
 import { useTelemetry, IncidentReport } from '../context/TelemetryContext';
@@ -21,11 +21,71 @@ export default function IncidentsScreen() {
     backendConnected,
     resolveIncidentById,
     refreshIncidents,
+    submitReport,
   } = useTelemetry();
 
   const [expandedIncidentId, setExpandedIncidentId] = useState<string | null>(null);
   const [resolving, setResolving] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+
+  // Manual Report states
+  const [isReportModalVisible, setIsReportModalVisible] = useState(false);
+  const [workerId, setWorkerId] = useState('WORKER-402');
+  const [deviceId, setDeviceId] = useState('TEST-ARDUINO-01');
+  const [remarks, setRemarks] = useState('');
+  const [includeAudio, setIncludeAudio] = useState(false);
+  const [submittingReport, setSubmittingReport] = useState(false);
+
+  const handleSubmitReport = async () => {
+    if (!remarks.trim()) {
+      Alert.alert('Remarks Required', 'Please enter remarks describing the incident.');
+      return;
+    }
+    setSubmittingReport(true);
+    try {
+      let imageFile: any = null;
+      let audioFile: any = null;
+
+      if (Platform.OS === 'web') {
+        const mockImageBlob = new Blob([new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10])], { type: 'image/png' });
+        imageFile = mockImageBlob;
+        if (includeAudio) {
+          audioFile = new Blob([new Uint8Array([82, 73, 70, 70, 0, 0, 0, 0, 87, 65, 86, 69])], { type: 'audio/wav' });
+        }
+      } else {
+        imageFile = {
+          uri: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
+          type: 'image/png',
+          name: 'report.png'
+        };
+        if (includeAudio) {
+          audioFile = {
+            uri: 'data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAERKgAAUkYAAAEAAgAZAGRhdGEAAAAA',
+            type: 'audio/wav',
+            name: 'report.wav'
+          };
+        }
+      }
+
+      await submitReport({
+        device_id: deviceId,
+        worker_id: workerId,
+        remarks: remarks,
+        image: imageFile,
+        audio: audioFile
+      });
+
+      Alert.alert('Report Submitted', 'The safety incident report has been submitted to the Snapdragon safety agent.');
+      setIsReportModalVisible(false);
+      setRemarks('');
+      setIncludeAudio(false);
+    } catch (err: any) {
+      console.error(err);
+      Alert.alert('Submission Failed', err.message || 'Could not send manual report.');
+    } finally {
+      setSubmittingReport(false);
+    }
+  };
 
   // Refresh incidents on mount
   useEffect(() => {
@@ -130,6 +190,21 @@ export default function IncidentsScreen() {
 
   return (
     <SafeAreaView style={styles.safeArea}>
+      <View style={styles.topHeader}>
+        <Text style={TYPOGRAPHY.h2}>Incidents Center</Text>
+        {backendConnected && (
+          <TouchableOpacity 
+            style={styles.reportButton} 
+            onPress={() => {
+              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
+              setIsReportModalVisible(true);
+            }}
+          >
+            <Ionicons name="add-circle-outline" size={16} color="#FFFFFF" style={{ marginRight: 6 }} />
+            <Text style={styles.reportButtonText}>REPORT INCIDENT</Text>
+          </TouchableOpacity>
+        )}
+      </View>
       <ScrollView
         contentContainerStyle={styles.scrollContainer}
         showsVerticalScrollIndicator={false}
@@ -354,11 +429,268 @@ export default function IncidentsScreen() {
         )}
 
       </ScrollView>
+
+      {/* REPORT INCIDENT MODAL */}
+      <Modal
+        animationType="slide"
+        transparent={true}
+        visible={isReportModalVisible}
+        onRequestClose={() => setIsReportModalVisible(false)}
+      >
+        <View style={styles.modalContainer}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>Report Safety Incident</Text>
+            <Text style={styles.modalSubtitle}>
+              Manually submit hazard conditions to the safety agent cluster.
+            </Text>
+
+            <View style={styles.formGroup}>
+              <Text style={styles.inputLabel}>Select Equipment / Device ID</Text>
+              <View style={styles.deviceRow}>
+                {['TEST-ARDUINO-01', 'TEST-DEV-01'].map((id) => (
+                  <TouchableOpacity
+                    key={id}
+                    style={[styles.deviceChip, deviceId === id && styles.deviceChipActive]}
+                    onPress={() => setDeviceId(id)}
+                  >
+                    <Text style={[styles.deviceChipText, deviceId === id && styles.deviceChipTextActive]}>
+                      {id}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </View>
+
+            <View style={styles.formGroup}>
+              <Text style={styles.inputLabel}>Worker ID / Operator Badge</Text>
+              <TextInput
+                style={styles.textInput}
+                value={workerId}
+                onChangeText={setWorkerId}
+                placeholder="e.g. WORKER-402"
+                placeholderTextColor={COLORS.textTertiary}
+              />
+            </View>
+
+            <View style={styles.formGroup}>
+              <Text style={styles.inputLabel}>Description of Hazard Remarks</Text>
+              <TextInput
+                style={[styles.textInput, styles.textArea]}
+                value={remarks}
+                onChangeText={setRemarks}
+                placeholder="Describe the unsafe machine condition, warning signs, noise, or leak..."
+                placeholderTextColor={COLORS.textTertiary}
+                multiline={true}
+                numberOfLines={3}
+              />
+            </View>
+
+            {/* Toggle mock file attachments */}
+            <View style={styles.toggleContainer}>
+              <View style={styles.toggleLabelRow}>
+                <Ionicons name="camera-outline" size={18} color={COLORS.primary} />
+                <Text style={styles.toggleText}>Attach Diagnostic Photo (Simulated)</Text>
+              </View>
+              <Switch
+                value={true}
+                disabled={true}
+                trackColor={{ false: COLORS.border, true: COLORS.primary }}
+              />
+            </View>
+
+            <View style={styles.toggleContainer}>
+              <View style={styles.toggleLabelRow}>
+                <Ionicons name="mic-outline" size={18} color={COLORS.info} />
+                <Text style={styles.toggleText}>Attach Machine Hiss Audio (Simulated)</Text>
+              </View>
+              <Switch
+                value={includeAudio}
+                onValueChange={setIncludeAudio}
+                trackColor={{ false: COLORS.border, true: COLORS.info }}
+                thumbColor={includeAudio ? '#FFFFFF' : '#f4f3f4'}
+              />
+            </View>
+
+            <View style={styles.modalActions}>
+              <TouchableOpacity
+                style={styles.cancelButton}
+                onPress={() => {
+                  Haptics.selectionAsync().catch(() => {});
+                  setIsReportModalVisible(false);
+                }}
+                disabled={submittingReport}
+              >
+                <Text style={styles.cancelButtonText}>CANCEL</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.submitButton, submittingReport && { opacity: 0.7 }]}
+                onPress={handleSubmitReport}
+                disabled={submittingReport}
+              >
+                {submittingReport ? (
+                  <ActivityIndicator size="small" color="#FFFFFF" style={{ marginRight: 6 }} />
+                ) : (
+                  <Ionicons name="send" size={14} color="#FFFFFF" style={{ marginRight: 6 }} />
+                )}
+                <Text style={styles.submitButtonText}>
+                  {submittingReport ? 'SUBMITTING...' : 'SUBMIT REPORT'}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
+  topHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: SPACING.md,
+    paddingTop: SPACING.md,
+    backgroundColor: COLORS.background,
+  },
+  reportButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: COLORS.primary,
+    paddingHorizontal: SPACING.md,
+    paddingVertical: SPACING.sm - 2,
+    borderRadius: 8,
+  },
+  reportButtonText: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: 'bold',
+  },
+  modalContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'rgba(0, 0, 0, 0.65)',
+    padding: SPACING.md,
+  },
+  modalContent: {
+    width: '100%',
+    maxWidth: 440,
+    backgroundColor: COLORS.surface,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    padding: SPACING.lg,
+  },
+  modalTitle: {
+    ...TYPOGRAPHY.h3,
+    fontWeight: 'bold',
+    color: COLORS.textPrimary,
+    marginBottom: SPACING.sm,
+  },
+  modalSubtitle: {
+    ...TYPOGRAPHY.caption,
+    color: COLORS.textTertiary,
+    marginBottom: SPACING.md,
+  },
+  formGroup: {
+    marginBottom: SPACING.md,
+  },
+  inputLabel: {
+    fontSize: 11,
+    fontWeight: 'bold',
+    color: COLORS.textSecondary,
+    marginBottom: 6,
+  },
+  textInput: {
+    backgroundColor: COLORS.surfaceLight,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    borderRadius: 8,
+    padding: SPACING.sm,
+    color: COLORS.textPrimary,
+    fontSize: 13,
+  },
+  textArea: {
+    height: 80,
+    textAlignVertical: 'top',
+  },
+  deviceRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+  },
+  deviceChip: {
+    flex: 1,
+    backgroundColor: COLORS.surfaceLight,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    borderRadius: 8,
+    paddingVertical: SPACING.sm - 2,
+    alignItems: 'center',
+    marginHorizontal: 4,
+  },
+  deviceChipActive: {
+    backgroundColor: COLORS.primary + '20',
+    borderColor: COLORS.primary,
+  },
+  deviceChipText: {
+    fontSize: 11,
+    color: COLORS.textSecondary,
+    fontWeight: '600',
+  },
+  deviceChipTextActive: {
+    color: COLORS.primary,
+    fontWeight: 'bold',
+  },
+  toggleContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: COLORS.surfaceLight,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    borderRadius: 8,
+    padding: SPACING.sm,
+    marginBottom: SPACING.sm,
+  },
+  toggleLabelRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  toggleText: {
+    fontSize: 12,
+    color: COLORS.textPrimary,
+    marginLeft: SPACING.sm,
+  },
+  modalActions: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    marginTop: SPACING.lg,
+  },
+  cancelButton: {
+    paddingHorizontal: SPACING.md,
+    paddingVertical: SPACING.sm,
+    marginRight: SPACING.sm,
+  },
+  cancelButtonText: {
+    color: COLORS.textSecondary,
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  submitButton: {
+    backgroundColor: COLORS.primary,
+    paddingHorizontal: SPACING.lg,
+    paddingVertical: SPACING.sm,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+  },
+  submitButtonText: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: 'bold',
+  },
   safeArea: {
     flex: 1,
     backgroundColor: COLORS.background,

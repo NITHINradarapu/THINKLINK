@@ -25,6 +25,7 @@ import type {
   HealthResponse,
   MonitorCheckResponse,
   MetricsResponse,
+  ReportResponse,
 } from './types';
 
 // ─── Base URL Management ─────────────────────────────────────
@@ -174,6 +175,35 @@ export const api = {
       body: formData,
       isFormData: true,
       timeoutMs: 30_000, // AI analysis can be slow
+    });
+  },
+
+  // ── Worker Report ────────────────────────────────────────
+  submitReport: async (params: {
+    device_id: string;
+    worker_id: string;
+    remarks?: string;
+    image: any;
+    audio?: any;
+  }): Promise<ReportResponse> => {
+    const formData = new FormData();
+    formData.append('device_id', params.device_id);
+    formData.append('worker_id', params.worker_id);
+    if (params.remarks) {
+      formData.append('remarks', params.remarks);
+    }
+    if (params.image) {
+      formData.append('image', params.image);
+    }
+    if (params.audio) {
+      formData.append('audio', params.audio);
+    }
+
+    return request<ReportResponse>('/report/', {
+      method: 'POST',
+      body: formData,
+      isFormData: true,
+      timeoutMs: 30_000,
     });
   },
 

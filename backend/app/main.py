@@ -26,6 +26,7 @@ from app.api.routes.monitor import router as monitor_router
 from app.api.routes.notifications import router as notifications_router
 from app.api.routes.report import router as report_router
 from app.api.routes.telemetry import router as telemetry_router
+from app.api.routes.trigger import router as trigger_router
 
 # ======================================================
 # Database
@@ -147,6 +148,8 @@ async def websocket_endpoint(websocket: WebSocket):
 app.include_router(telemetry_router)
 
 app.include_router(report_router)
+
+app.include_router(trigger_router)
 
 app.include_router(ai_router)
 
