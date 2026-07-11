@@ -109,9 +109,9 @@ interface TelemetryContextProps {
 const TelemetryContext = createContext<TelemetryContextProps | undefined>(undefined);
 
 // Default Socket.IO URL (mock server)
-const DEFAULT_SOCKET_IP = Platform.OS === 'android' ? 'http://10.91.48.73:3000' : 'http://localhost:3000';
+const DEFAULT_SOCKET_IP = Platform.OS === 'android' ? 'http://10.48.65.93:3000' : 'http://localhost:3000';
 // Default REST API URL (FastAPI backend)
-const DEFAULT_API_URL = Platform.OS === 'android' ? 'http://10.91.48.73:8000' : 'http://localhost:8000';
+const DEFAULT_API_URL = Platform.OS === 'android' ? 'http://10.48.65.93:8000' : 'http://localhost:8000';
 
 // Helper to pre-populate mock historical telemetry data
 const generateInitialHistory = (): HistoricalReading[] => {
