@@ -52,9 +52,8 @@ class HealthService:
 
         try:
 
-            from app.services.master_orchestrator_service import get_master_orchestrator
-            orchestrator = get_master_orchestrator()
-            return "UP" if orchestrator is not None else "DOWN"
+            import app.services.master_orchestrator_service as service
+            return "UP" if service._orchestrator is not None else "STANDBY"
 
         except Exception:
 
