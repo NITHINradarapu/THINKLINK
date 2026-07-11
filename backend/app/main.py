@@ -51,6 +51,12 @@ from app.services.system_log_service import system_log_service
 # Hardware Integration (Arduino)
 # ======================================================
 
+import json
+from app.schemas.telemetry import TelemetryRequest
+from app.services.telemetry_pipeline import telemetry_pipeline
+from app.services.threshold_checker import ThresholdChecker
+from app.services.action_executor import action_executor
+
 # Change these in .env if your Arduino appears on a different COM port.
 SERIAL_PORT = os.getenv("ARDUINO_SERIAL_PORT", "COM3")
 BAUD_RATE = int(os.getenv("ARDUINO_BAUD_RATE", "9600"))
@@ -72,6 +78,38 @@ except Exception as e:
     print("[Warning] Close Arduino IDE Serial Monitor before starting the backend.", flush=True)
     print(f"[Warning] Available serial ports: {available_serial_ports()}", flush=True)
 
+def control_buzzer(triggered: bool):
+    global arduino
+    if arduino:
+        try:
+            cmd = b"1" if triggered else b"0"
+            arduino.write(cmd)
+            print(f"[Hardware] Control Buzzer -> {'ON' if triggered else 'OFF'}", flush=True)
+        except Exception as e:
+            print(f"[Hardware] Error writing to serial: {e}", flush=True)
+
+# Register Swarm action execution handlers with the system
+def activate_buzzer_handler(db, incident):
+    control_buzzer(True)
+    print(f"[Hardware Action] Buzzer activated via AI Swarm recommended action", flush=True)
+
+def deactivate_buzzer_handler(db, incident):
+    control_buzzer(False)
+    print(f"[Hardware Action] Buzzer deactivated via AI Swarm recommended action", flush=True)
+
+def shutdown_machine_handler(db, incident):
+    global arduino
+    if arduino:
+        try:
+            arduino.write(b"2")
+            print(f"[Hardware Action] Machine shutdown signal sent to Arduino", flush=True)
+        except Exception as e:
+            print(f"[Hardware Action] Error sending shutdown command: {e}", flush=True)
+
+action_executor.register("activate_buzzer", activate_buzzer_handler)
+action_executor.register("deactivate_buzzer", deactivate_buzzer_handler)
+action_executor.register("shutdown_machine", shutdown_machine_handler)
+
 async def read_serial_data():
     """Background task to read live Arduino telemetry and broadcast it"""
     while True:
@@ -86,15 +124,79 @@ async def read_serial_data():
                 if raw_data:
                     print(f"[Arduino Raw] {raw_data}", flush=True)
 
-                # Dashboard updates expect JSON from Arduino, for example:
-                # {"temperature":320,"sound":120,"flame_detected":0,"safety_breach":1}
+                # Dashboard updates expect JSON from Arduino
                 if raw_data.startswith("{") and raw_data.endswith("}"):
                     print(f"[Arduino Data] {raw_data}", flush=True)
+                    
+                    try:
+                        data_dict = json.loads(raw_data)
+                    except json.JSONDecodeError as je:
+                        print(f"[Hardware] JSON decode error: {je}", flush=True)
+                        continue
 
-                    # Broadcast to all locally tracked websocket clients
+                    # 1. Normalize fields to fit our TelemetryRequest schema
+                    device_id = data_dict.get("device_id", data_dict.get("device", "ARDUINO-01"))
+                    
+                    temp_val = float(data_dict.get("temperature", data_dict.get("temp", 25.0)))
+                    # Handle raw scaled ADC value if it represents e.g. 320 for 32.0°C
+                    if temp_val > 150.0:
+                        temp_val = temp_val / 10.0
+
+                    gas_val = float(data_dict.get("gas_level", data_dict.get("gas", data_dict.get("sound", 120.0))))
+                    
+                    smoke_detected = bool(data_dict.get("smoke_detected", data_dict.get("smoke", False)))
+                    if data_dict.get("flame_detected", 0) > 0 or data_dict.get("safety_breach", 0) > 0:
+                        smoke_detected = True
+
+                    humidity_val = float(data_dict.get("humidity", 50.0))
+                    battery_val = int(data_dict.get("battery_level", data_dict.get("battery", 100)))
+                    vibration_val = float(data_dict.get("vibration", 0.05))
+
+                    telemetry_obj = TelemetryRequest(
+                        device_id=device_id,
+                        temperature=temp_val,
+                        humidity=humidity_val,
+                        gas_level=gas_val,
+                        smoke_detected=smoke_detected,
+                        battery_level=battery_val,
+                        vibration=vibration_val
+                    )
+
+                    # 2. Process via TelemetryPipeline to trigger warnings, SQLite logging, and AI review if needed
+                    db = SessionLocal()
+                    try:
+                        pipeline_result = await telemetry_pipeline.process(
+                            db=db,
+                            telemetry=telemetry_obj
+                        )
+                        print(f"[Telemetry Pipeline] Result: {pipeline_result}", flush=True)
+                    except Exception as pe:
+                        print(f"[Telemetry Pipeline] Error processing telemetry: {pe}", flush=True)
+                    finally:
+                        db.close()
+
+                    # 3. Check thresholds locally for immediate buzzer control
+                    checker_res = ThresholdChecker.check(telemetry_obj)
+                    if checker_res["triggered"]:
+                        control_buzzer(True)
+                        print(f"[Hardware] Threshold crossed: {checker_res['reasons']}. Buzzer ACTIVATED.", flush=True)
+                    else:
+                        control_buzzer(False)
+
+                    # 4. Broadcast the normalized telemetry payload to connected websocket clients
+                    broadcast_payload = json.dumps({
+                        "device_id": device_id,
+                        "temperature": temp_val,
+                        "humidity": humidity_val,
+                        "gas": gas_val,
+                        "smoke_detected": smoke_detected,
+                        "battery_level": battery_val,
+                        "vibration": vibration_val,
+                        "buzzer_active": checker_res["triggered"]
+                    })
                     for client in list(arduino_clients):
                         try:
-                            await client.send_text(raw_data)
+                            await client.send_text(broadcast_payload)
                         except Exception:
                             pass
         except serial.SerialException as e:
