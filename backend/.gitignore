@@ -1,0 +1,48 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Databases
+*.db
+*.sqlite3
+
+# Logs
+logs/
+*.log
+
+# Test caches
+.pytest_cache/
+.mypy_cache/
+.coverage
+
+# IDE/editor
+.vscode/
+.idea/
+
+# Local virtual environment folder
+venv/
+
+# Large binary / vector DB files (ChromaDB, FAISS, etc.)
+thinklink_knowledge/
+*.bin
+*.idx
+
+# Raw PDFs (large binary files)
+raw_pdfs/
+
+# Uploaded media files
+uploads/
+
+# Excalidraw design files (optional — remove if you want to track)
+*.excalidraw

@@ -1,0 +1,19 @@
+import logging
+import sys
+
+
+def setup_logging():
+    """
+    Configure application logging.
+    """
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+        handlers=[
+            logging.StreamHandler(sys.stdout),
+            logging.FileHandler("logs/thinklink.log")
+        ]
+    )
+
+    return logging.getLogger("ThinkLink")
