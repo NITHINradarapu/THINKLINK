@@ -6,6 +6,8 @@ Main FastAPI Application
 
 import asyncio
 import os
+import threading
+import time
 
 import serial
 from serial.tools import list_ports
@@ -129,11 +131,124 @@ action_executor.register("activate_led", activate_led_handler)
 action_executor.register("deactivate_led", deactivate_led_handler)
 action_executor.register("shutdown_machine", shutdown_machine_handler)
 
-async def read_serial_data():
-    """Background task to read live Arduino telemetry and broadcast it"""
+async def handle_serial_disconnect():
+    if websocket_manager.connections_status.get("arduino", False):
+        websocket_manager.connections_status["arduino"] = False
+        await websocket_manager.broadcast({
+            "type": "connections",
+            "data": websocket_manager.connections_status
+        })
+        print("[Hardware] Arduino flagged offline and broadcasted.", flush=True)
+
+async def process_arduino_payload(raw_data: str):
+    import json
+    try:
+        data_dict = json.loads(raw_data)
+    except json.JSONDecodeError as je:
+        print(f"[Hardware] JSON decode error: {je}", flush=True)
+        return
+
+    # 1. Normalize fields to fit our TelemetryRequest schema (robust checking for all sensor variations)
+    device_id = data_dict.get("device_id", data_dict.get("device", "ARDUINO-01"))
+    
+    # Temperature
+    temp_val = float(data_dict.get("temperature", data_dict.get("temp", 25.0)))
+    # Handle raw scaled ADC value if it represents e.g. 320 for 32.0°C
+    if temp_val > 150.0:
+        temp_val = temp_val / 10.0
+
+    # Gas / Smoke / Sound / MQ sensor
+    gas_val = float(data_dict.get("gas_level", data_dict.get("gas", data_dict.get("sound", 120.0))))
+    
+    # Smoke / Flame / Fire / Safety breach binary alerts
+    smoke_detected = bool(data_dict.get("smoke_detected", data_dict.get("smoke", False)))
+    if (data_dict.get("flame_detected", 0) > 0 or 
+        data_dict.get("safety_breach", 0) > 0 or 
+        data_dict.get("flame", False) or 
+        data_dict.get("fire", False)):
+        smoke_detected = True
+
+    # Humidity
+    humidity_val = float(data_dict.get("humidity", data_dict.get("hum", 50.0)))
+    
+    # Battery
+    battery_val = int(data_dict.get("battery_level", data_dict.get("battery", 100)))
+    
+    # Vibration / Sound / Motion anomalies
+    vibration_val = float(data_dict.get("vibration", data_dict.get("vib", 0.05)))
+    if "sound" in data_dict and "vibration" not in data_dict:
+        vibration_val = float(data_dict["sound"]) / 1000.0
+    if data_dict.get("motion", False) or data_dict.get("movement", False):
+        vibration_val = max(vibration_val, 0.8)
+
+    telemetry_obj = TelemetryRequest(
+        device_id=device_id,
+        temperature=temp_val,
+        humidity=humidity_val,
+        gas_level=gas_val,
+        smoke_detected=smoke_detected,
+        battery_level=battery_val,
+        vibration=vibration_val
+    )
+
+    # 2. Process via TelemetryPipeline to trigger warnings, SQLite logging, and AI review if needed
+    db = SessionLocal()
+    try:
+        pipeline_result = await telemetry_pipeline.process(
+            db=db,
+            telemetry=telemetry_obj
+        )
+        print(f"[Telemetry Pipeline] Result: {pipeline_result}", flush=True)
+
+        # Auto-broadcast reconnect updates if Arduino was previously flagged offline
+        if not websocket_manager.connections_status.get("arduino", False):
+            websocket_manager.connections_status["arduino"] = True
+            await websocket_manager.broadcast({
+                "type": "connections",
+                "data": websocket_manager.connections_status
+            })
+            print(f"[Hardware] Arduino connection re-established and broadcasted.", flush=True)
+    except Exception as pe:
+        print(f"[Telemetry Pipeline] Error processing telemetry: {pe}", flush=True)
+    finally:
+        db.close()
+
+    # 3. Check thresholds locally for immediate buzzer and LED control
+    checker_res = ThresholdChecker.check(telemetry_obj)
+    if checker_res["triggered"]:
+        control_system_state(True)
+        print(f"[Hardware] Threshold crossed: {checker_res['reasons']}. Alarm status: ACTIVE.", flush=True)
+    else:
+        control_system_state(False)
+
+    # 4. Broadcast the normalized telemetry payload to connected websocket clients
+    broadcast_payload = json.dumps({
+        "device_id": device_id,
+        "temperature": temp_val,
+        "humidity": humidity_val,
+        "gas": gas_val,
+        "smoke_detected": smoke_detected,
+        "battery_level": battery_val,
+        "vibration": vibration_val,
+        "buzzer_active": checker_res["triggered"],
+        "led_red_active": checker_res["triggered"]
+    })
+    for client in list(arduino_clients):
+        try:
+            await client.send_text(broadcast_payload)
+        except Exception:
+            pass
+
+def read_serial_data_sync():
+    """Background thread function to read live Arduino telemetry synchronously without blocking FastAPI's event loop"""
+    import json
+    from app.utils import loop as loop_module
+
+    print("[Hardware Thread] Serial reader thread started.", flush=True)
+    
     while True:
         if not arduino:
-            await asyncio.sleep(1)
+            time.sleep(1)
             continue
 
         try:
@@ -141,121 +256,27 @@ async def read_serial_data():
                 raw_data = arduino.readline().decode("utf-8", errors="replace").strip()
 
                 if raw_data:
-                    print(f"[Arduino Raw] {raw_data}", flush=True)
+                    print(f"[Arduino Raw Thread] {raw_data}", flush=True)
 
-                # Dashboard updates expect JSON from Arduino
                 if raw_data.startswith("{") and raw_data.endswith("}"):
-                    print(f"[Arduino Data] {raw_data}", flush=True)
-                    
-                    try:
-                        data_dict = json.loads(raw_data)
-                    except json.JSONDecodeError as je:
-                        print(f"[Hardware] JSON decode error: {je}", flush=True)
-                        continue
-
-                    # 1. Normalize fields to fit our TelemetryRequest schema (robust checking for all sensor variations)
-                    device_id = data_dict.get("device_id", data_dict.get("device", "ARDUINO-01"))
-                    
-                    # Temperature
-                    temp_val = float(data_dict.get("temperature", data_dict.get("temp", 25.0)))
-                    # Handle raw scaled ADC value if it represents e.g. 320 for 32.0°C
-                    if temp_val > 150.0:
-                        temp_val = temp_val / 10.0
-
-                    # Gas / Smoke / Sound / MQ sensor
-                    gas_val = float(data_dict.get("gas_level", data_dict.get("gas", data_dict.get("sound", 120.0))))
-                    
-                    # Smoke / Flame / Fire / Safety breach binary alerts
-                    smoke_detected = bool(data_dict.get("smoke_detected", data_dict.get("smoke", False)))
-                    if (data_dict.get("flame_detected", 0) > 0 or 
-                        data_dict.get("safety_breach", 0) > 0 or 
-                        data_dict.get("flame", False) or 
-                        data_dict.get("fire", False)):
-                        smoke_detected = True
-
-                    # Humidity
-                    humidity_val = float(data_dict.get("humidity", data_dict.get("hum", 50.0)))
-                    
-                    # Battery
-                    battery_val = int(data_dict.get("battery_level", data_dict.get("battery", 100)))
-                    
-                    # Vibration / Sound / Motion anomalies
-                    vibration_val = float(data_dict.get("vibration", data_dict.get("vib", 0.05)))
-                    if "sound" in data_dict and "vibration" not in data_dict:
-                        vibration_val = float(data_dict["sound"]) / 1000.0
-                    if data_dict.get("motion", False) or data_dict.get("movement", False):
-                        vibration_val = max(vibration_val, 0.8)
-
-                    telemetry_obj = TelemetryRequest(
-                        device_id=device_id,
-                        temperature=temp_val,
-                        humidity=humidity_val,
-                        gas_level=gas_val,
-                        smoke_detected=smoke_detected,
-                        battery_level=battery_val,
-                        vibration=vibration_val
-                    )
-
-                    # 2. Process via TelemetryPipeline to trigger warnings, SQLite logging, and AI review if needed
-                    db = SessionLocal()
-                    try:
-                        pipeline_result = await telemetry_pipeline.process(
-                            db=db,
-                            telemetry=telemetry_obj
+                    # Schedule payload processing back onto the main event loop thread-safely
+                    if loop_module.main_loop:
+                        asyncio.run_coroutine_threadsafe(
+                            process_arduino_payload(raw_data),
+                            loop_module.main_loop
                         )
-                        print(f"[Telemetry Pipeline] Result: {pipeline_result}", flush=True)
-
-                        # Auto-broadcast reconnect updates if Arduino was previously flagged offline
-                        if not websocket_manager.connections_status.get("arduino", False):
-                            websocket_manager.connections_status["arduino"] = True
-                            await websocket_manager.broadcast({
-                                "type": "connections",
-                                "data": websocket_manager.connections_status
-                            })
-                            print(f"[Hardware] Arduino connection re-established and broadcasted.", flush=True)
-                    except Exception as pe:
-                        print(f"[Telemetry Pipeline] Error processing telemetry: {pe}", flush=True)
-                    finally:
-                        db.close()
-
-                    # 3. Check thresholds locally for immediate buzzer and LED control
-                    checker_res = ThresholdChecker.check(telemetry_obj)
-                    if checker_res["triggered"]:
-                        control_system_state(True)
-                        print(f"[Hardware] Threshold crossed: {checker_res['reasons']}. Alarm status: ACTIVE.", flush=True)
-                    else:
-                        control_system_state(False)
-
-                    # 4. Broadcast the normalized telemetry payload to connected websocket clients
-                    broadcast_payload = json.dumps({
-                        "device_id": device_id,
-                        "temperature": temp_val,
-                        "humidity": humidity_val,
-                        "gas": gas_val,
-                        "smoke_detected": smoke_detected,
-                        "battery_level": battery_val,
-                        "vibration": vibration_val,
-                        "buzzer_active": checker_res["triggered"],
-                        "led_red_active": checker_res["triggered"]
-                    })
-                    for client in list(arduino_clients):
-                        try:
-                            await client.send_text(broadcast_payload)
-                        except Exception:
-                            pass
         except serial.SerialException as e:
-            print(f"[Hardware] Serial read error: {e}", flush=True)
-            if websocket_manager.connections_status.get("arduino", False):
-                websocket_manager.connections_status["arduino"] = False
-                await websocket_manager.broadcast({
-                    "type": "connections",
-                    "data": websocket_manager.connections_status
-                })
-            await asyncio.sleep(1)
+            print(f"[Hardware Thread] Serial read error: {e}", flush=True)
+            if loop_module.main_loop:
+                asyncio.run_coroutine_threadsafe(
+                    handle_serial_disconnect(),
+                    loop_module.main_loop
+                )
+            time.sleep(1)
         except Exception as e:
-            print(f"[Hardware] Error reading Arduino data: {e}", flush=True)
+            print(f"[Hardware Thread] Error reading Arduino data: {e}", flush=True)
         
-        await asyncio.sleep(0.05)
+        time.sleep(0.05)
 
 async def run_device_health_monitor():
     """Background task to run the device health check periodically and notify clients of changes"""
@@ -312,8 +333,9 @@ async def lifespan(app: FastAPI):
     from app.utils import loop as loop_module
     loop_module.main_loop = asyncio.get_running_loop()
     
-    # Start the Arduino Serial Reader Task
-    serial_task = asyncio.create_task(read_serial_data())
+    # Start the Arduino Serial Reader Thread (daemonized to prevent hanging event loop)
+    serial_thread = threading.Thread(target=read_serial_data_sync, daemon=True)
+    serial_thread.start()
     
     # Start the Device Health Monitor Task
     health_task = asyncio.create_task(run_device_health_monitor())
@@ -343,7 +365,6 @@ async def lifespan(app: FastAPI):
     yield
 
     # Clean up hardware tasks and connection on shutdown
-    serial_task.cancel()
     health_task.cancel()
     if arduino:
         arduino.close()
