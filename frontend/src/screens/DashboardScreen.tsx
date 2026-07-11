@@ -25,11 +25,12 @@ export default function DashboardScreen() {
     if (backendConnected) {
       try {
         const telemetryPayload = JSON.stringify({
+          device_id: "TEST-ARDUINO-01",
           temperature: sensorData.temperature,
           humidity: sensorData.humidity,
           gas_level: sensorData.gas,
           smoke_detected: sensorData.smoke_detected,
-          battery_level: sensorData.battery_level,
+          battery_level: sensorData.battery_level || 90,
         });
 
         const result = await analyzeWithAI({ telemetry: telemetryPayload });

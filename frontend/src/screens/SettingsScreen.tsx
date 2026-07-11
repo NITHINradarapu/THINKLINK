@@ -59,6 +59,13 @@ export default function SettingsScreen() {
       const response = await fetch(`${apiBaseUrl}${path}`);
       const data = await response.json();
       console.log(`Simulation response:`, data);
+      
+      if (data.success) {
+        const summary = data.pipeline_result?.ai_result?.summary || data.ai_reasoning || data.message || 'Simulation started';
+        Alert.alert('Simulation Triggered', summary);
+      } else {
+        Alert.alert('Simulation Error', data.message || 'Backend failed to process the simulation request.');
+      }
     } catch (error) {
       console.error(error);
       Alert.alert('Connection Error', `Failed to send trigger to ${apiBaseUrl}${path}. Make sure the Snapdragon AI PC FastAPI server is running.`);

@@ -46,3 +46,7 @@ uploads/
 
 # Excalidraw design files (optional — remove if you want to track)
 *.excalidraw
+
+# Large local AI model weights
+models/
+

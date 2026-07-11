@@ -32,7 +32,7 @@ import type {
 
 const DEFAULT_API_BASE_URL =
   Platform.OS === 'android'
-    ? 'http://10.0.2.2:8000'
+    ? 'http://10.91.48.73:8000'
     : 'http://localhost:8000';
 
 let _baseUrl: string = DEFAULT_API_BASE_URL;

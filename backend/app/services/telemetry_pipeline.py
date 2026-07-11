@@ -112,7 +112,7 @@ class TelemetryPipelineService:
                     "gas": telemetry.gas_level,
                     "smoke_detected": telemetry.smoke_detected,
                     "battery_level": telemetry.battery_level,
-                    "vibration": 0.05
+                    "vibration": getattr(telemetry, "vibration", 0.05) or 0.05
                 }
                 await websocket_manager.broadcast_telemetry(telemetry_dict)
             except Exception as ws_err:
@@ -223,12 +223,11 @@ class TelemetryPipelineService:
                 "Sending request to Supervisor AI.",
             )
 
-            ai_result = supervisor_ai.analyze(
-
+            from fastapi.concurrency import run_in_threadpool
+            ai_result = await run_in_threadpool(
+                supervisor_ai.analyze,
                 telemetry=telemetry,
-
                 event=event,
-
             )
 
             metrics_service.ai()

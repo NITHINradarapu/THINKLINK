@@ -109,9 +109,9 @@ interface TelemetryContextProps {
 const TelemetryContext = createContext<TelemetryContextProps | undefined>(undefined);
 
 // Default Socket.IO URL (mock server)
-const DEFAULT_SOCKET_IP = Platform.OS === 'android' ? 'http://10.0.2.2:3000' : 'http://localhost:3000';
+const DEFAULT_SOCKET_IP = Platform.OS === 'android' ? 'http://10.91.48.73:3000' : 'http://localhost:3000';
 // Default REST API URL (FastAPI backend)
-const DEFAULT_API_URL = Platform.OS === 'android' ? 'http://10.91.62.164:8000' : 'http://localhost:8000';
+const DEFAULT_API_URL = Platform.OS === 'android' ? 'http://10.91.48.73:8000' : 'http://localhost:8000';
 
 // Helper to pre-populate mock historical telemetry data
 const generateInitialHistory = (): HistoricalReading[] => {
@@ -369,22 +369,28 @@ export function TelemetryProvider({ children }: { children: React.ReactNode }) {
         if (activeIncidents.value.length > 0) {
           const latestActive = mapIncidentResponseToReport(activeIncidents.value[0]);
           if (latestActive.id !== dismissedIncidentIdRef.current) {
-            setActiveIncident(latestActive);
+            setActiveIncident(prev => {
+              if (prev?.id === latestActive.id) return prev;
+              return latestActive;
+            });
             setAiStatus({ status: 'analyzing', latestEvent: `Active incident: ${latestActive.title}` });
           }
         } else {
           // No active incidents from backend
           // Only clear if we don't have a socket-pushed incident
-          if (activeIncident?._backend) {
-            setActiveIncident(null);
-            setAiStatus({ status: 'monitoring', latestEvent: 'All systems nominal.' });
-          }
+          setActiveIncident(prev => {
+            if (prev?._backend) {
+              setAiStatus({ status: 'monitoring', latestEvent: 'All systems nominal.' });
+              return null;
+            }
+            return prev;
+          });
         }
       }
     } catch (err) {
       console.log('[API] Incidents refresh failed:', err);
     }
-  }, [activeIncident]);
+  }, []);
 
   // Notification polling
   const refreshNotifications = useCallback(async () => {
@@ -398,7 +404,7 @@ export function TelemetryProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
-  // Start polling timers when backend is connected
+  // Fetch initial data once backend connects
   useEffect(() => {
     if (!backendConnected) return;
 
@@ -406,16 +412,6 @@ export function TelemetryProvider({ children }: { children: React.ReactNode }) {
     refreshDashboard();
     refreshIncidents();
     refreshNotifications();
-
-    const dashboardTimer = setInterval(refreshDashboard, DASHBOARD_POLL_INTERVAL);
-    const incidentsTimer = setInterval(refreshIncidents, INCIDENTS_POLL_INTERVAL);
-    const notificationTimer = setInterval(refreshNotifications, NOTIFICATION_POLL_INTERVAL);
-
-    return () => {
-      clearInterval(dashboardTimer);
-      clearInterval(incidentsTimer);
-      clearInterval(notificationTimer);
-    };
   }, [backendConnected, refreshDashboard, refreshIncidents, refreshNotifications]);
 
   // ────────────────────────────────────────────────────────

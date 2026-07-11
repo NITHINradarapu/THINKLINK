@@ -131,12 +131,12 @@ app.add_middleware(
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
-    await websocket_manager.connect(websocket)
     try:
+        await websocket_manager.connect(websocket)
         while True:
             data = await websocket.receive_text()
             await websocket_manager.handle_message(websocket, data)
-    except WebSocketDisconnect:
+    except (WebSocketDisconnect, RuntimeError):
         websocket_manager.disconnect(websocket)
 
 
@@ -145,27 +145,22 @@ async def websocket_endpoint(websocket: WebSocket):
 # Register Routes
 # ======================================================
 
-app.include_router(telemetry_router)
-
-app.include_router(report_router)
-
-app.include_router(trigger_router)
-
-app.include_router(ai_router)
-
-app.include_router(incidents_router)
-
-app.include_router(dashboard_router)
-
-app.include_router(devices_router)
-
-app.include_router(notifications_router)
-
-app.include_router(health_router)
-
-app.include_router(monitor_router)
-
-app.include_router(metrics_router)
+# Register each router under base path and /api/v1 prefix for compatibility
+for r in [
+    telemetry_router,
+    report_router,
+    trigger_router,
+    ai_router,
+    incidents_router,
+    dashboard_router,
+    devices_router,
+    notifications_router,
+    health_router,
+    monitor_router,
+    metrics_router,
+]:
+    app.include_router(r)
+    app.include_router(r, prefix="/api/v1")
 
 
 # ======================================================

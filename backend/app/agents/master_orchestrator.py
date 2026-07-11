@@ -13,6 +13,7 @@ class MasterOrchestrator:
         print("\n[System] Booting ThinkLink Multi-Agent Swarm...")
         
         self.script_dir = os.path.dirname(os.path.abspath(__file__))
+        self.ollama_offline = False
         
         # 1. LOAD PHI-3 (The Brain)
         self.model_path = os.path.join(self.script_dir, "../../models/phi-3-mini-cpu/cpu_and_mobile/cpu-int4-rtn-block-32")
@@ -22,14 +23,21 @@ class MasterOrchestrator:
             self.tokenizer = oga.Tokenizer(self.model)
             self.params = oga.GeneratorParams(self.model)
             self.params.set_search_options(max_length=2048, temperature=0.0) 
+            print("[System] Phi-3 Engine Loaded Successfully.")
         except Exception as e:
-            print(f"[ERROR] Failed to load Phi-3. Details: {e}")
-            return
+            print(f"[ERROR] Failed to load Phi-3. Details: {e}. Ollama fallback will be used.")
+            self.model = None
+            self.tokenizer = None
             
         # 2. LOAD FASTER-WHISPER (The Ears)
         print("[System] Loading Audio Engine (Faster-Whisper base.en)...")
-        # 'base.en' is tiny, English-only, and extremely fast on CPUs
-        self.audio_model = WhisperModel("base.en", device="cpu", compute_type="int8")
+        try:
+            # 'base.en' is tiny, English-only, and extremely fast on CPUs
+            self.audio_model = WhisperModel("base.en", device="cpu", compute_type="int8")
+            print("[System] Whisper Audio Engine Loaded Successfully.")
+        except Exception as e:
+            print(f"[Warning] Failed to load Whisper Audio model: {e}")
+            self.audio_model = None
         
         # 3. LOAD THE "EYES" (BLIP - Ultra Low RAM Mode)
         print("[System] Loading Vision Engine (BLIP Base)...")
@@ -43,20 +51,52 @@ class MasterOrchestrator:
 
         # 4. CONNECT TO KNOWLEDGE BASE (ChromaDB)
         print("[System] Connecting to ChromaDB Knowledge Bases...")
-        self.db_path = os.path.join(self.script_dir, "../../thinklink_knowledge")
-        self.chroma_client = chromadb.PersistentClient(path=self.db_path)
-        self.ef = embedding_functions.DefaultEmbeddingFunction()
-        
-        self.collections = {
-            "LITHOGRAPHY": self.chroma_client.get_or_create_collection(name="agent4_litho_collection", embedding_function=self.ef),
-            "DEPOSITION": self.chroma_client.get_or_create_collection(name="agent5_depo_collection", embedding_function=self.ef),
-            "QUALITY": self.chroma_client.get_or_create_collection(name="agent6_quality_collection", embedding_function=self.ef),
-            "PACKAGING": self.chroma_client.get_or_create_collection(name="agent7_packaging_collection", embedding_function=self.ef)
-        }
+        try:
+            self.db_path = os.path.join(self.script_dir, "../../thinklink_knowledge")
+            self.chroma_client = chromadb.PersistentClient(path=self.db_path)
+            self.ef = embedding_functions.DefaultEmbeddingFunction()
+            
+            self.collections = {
+                "LITHOGRAPHY": self.chroma_client.get_or_create_collection(name="agent4_litho_collection", embedding_function=self.ef),
+                "DEPOSITION": self.chroma_client.get_or_create_collection(name="agent5_depo_collection", embedding_function=self.ef),
+                "QUALITY": self.chroma_client.get_or_create_collection(name="agent6_quality_collection", embedding_function=self.ef),
+                "PACKAGING": self.chroma_client.get_or_create_collection(name="agent7_packaging_collection", embedding_function=self.ef)
+            }
+            print("[System] ChromaDB connected successfully.")
+        except Exception as e:
+            print(f"[ERROR] Failed to connect to ChromaDB: {e}")
+            self.collections = {}
+            
         print("[System] Swarm Engine Online and Ready to route.\n")
 
     def run_llm(self, prompt: str) -> str:
         """Utility: All agents pass their prompts through this single brain."""
+        if not getattr(self, "model", None) or not getattr(self, "tokenizer", None):
+            # Check if we already detected Ollama is offline to fail fast
+            if getattr(self, "ollama_offline", False):
+                print("[Swarm LLM] Ollama is known to be offline. Skipping request.")
+                return "Error: AI engine is offline."
+
+            # Fallback to local Ollama service if local model is offline/not found
+            import requests
+            try:
+                from app.core.config import settings
+                url = getattr(settings, "ai_service_url", "http://localhost:11434/api/generate")
+                response = requests.post(
+                    url,
+                    json={"prompt": prompt},
+                    timeout=5, # Reduce timeout for local Ollama to fail fast
+                )
+                response.raise_for_status()
+                data = response.json()
+                # Clear offline flag on success
+                self.ollama_offline = False
+                return data.get("response", "").strip()
+            except Exception as e:
+                print(f"[ERROR] Phi-3 model not loaded and Ollama fallback failed: {e}")
+                self.ollama_offline = True # Set flag to fail fast next time
+                return "Error: AI engine is offline."
+
         input_tokens = self.tokenizer.encode(prompt)
         output_generator = oga.Generator(self.model, self.params)
         output_generator.append_tokens(input_tokens)
@@ -119,6 +159,12 @@ Do not include any other text.<|end|>
 RAW DATA: {raw_data}<|end|>
 <|assistant|>"""
             translated_alert = self.run_llm(prompt)
+            if "Error: AI engine is offline" in translated_alert:
+                # Rule-based fallback translation
+                temp = raw_data.get("temperature", raw_data.get("thermo_celsius", "unknown"))
+                gas = raw_data.get("gas_level", "unknown")
+                loc = raw_data.get("location", raw_data.get("device_id", "machine"))
+                translated_alert = f"Anomaly alert in {loc}: temperature is {temp}°C, gas level is {gas}."
             print(f"[Input Agent] Translation: {translated_alert}")
             return translated_alert
 
@@ -291,7 +337,11 @@ ALERT: {clean_data}<|end|>
                 final_route = domain
                 break
                 
-        print(f"[Supervisor] AI Decision -> Routing to {final_route} Expert.")
+        if final_route == "UNKNOWN":
+            print("[Supervisor] Warning: Swarm AI routing failed or offline. Defaulting to QUALITY domain expert.")
+            final_route = "QUALITY"
+            
+        print(f"[Supervisor] Route Result -> Routing to {final_route} Expert.")
         return final_route
     def domain_expert_agent(self, domain: str, sensor_text: str, raw_telemetry: dict = None) -> str:
         """Agents 4-7: Dynamically adapts based on Supervisor's route and raw data."""
@@ -358,6 +408,18 @@ Analyze the data against the context and output the strict JSON.<|end|>
         print(f"[Agent {domain}] Generating JSON Diagnosis...")
         raw_output = self.run_llm(prompt)
         
+        if "Error: AI engine is offline" in raw_output:
+            print(f"[Agent {domain}] WARNING: AI engine is offline. Generating safe fallback JSON.")
+            return json.dumps({
+                "level": "MEDIUM",
+                "confidence": 70,
+                "summary": f"Semiconductor anomaly detected in {domain} area. Swarm AI is offline.",
+                "reasoning": "Determined via fallback rules due to connection issues with model engine.",
+                "recommended_actions": ["notify_mobile"],
+                "should_create_incident": True,
+                "category": f"{domain} Anomaly"
+            })
+
         # --- HACKATHON BULLETPROOF JSON EXTRACTOR ---
         # This finds the first '{' and the last '}' and extracts ONLY what is inside, 
         # completely ignoring any conversational text the AI adds before or after.
