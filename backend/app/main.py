@@ -73,10 +73,12 @@ try:
     arduino = serial.Serial(SERIAL_PORT, BAUD_RATE, timeout=0.1)
     arduino.reset_input_buffer()
     print(f"[Hardware] Connected to Arduino on {SERIAL_PORT} at {BAUD_RATE} baud", flush=True)
+    websocket_manager.connections_status["arduino"] = True
 except Exception as e:
     print(f"[Warning] Could not connect to {SERIAL_PORT}: {e}", flush=True)
     print("[Warning] Close Arduino IDE Serial Monitor before starting the backend.", flush=True)
     print(f"[Warning] Available serial ports: {available_serial_ports()}", flush=True)
+    websocket_manager.connections_status["arduino"] = False
 
 def control_system_state(has_errors: bool):
     global arduino
@@ -202,6 +204,15 @@ async def read_serial_data():
                             telemetry=telemetry_obj
                         )
                         print(f"[Telemetry Pipeline] Result: {pipeline_result}", flush=True)
+
+                        # Auto-broadcast reconnect updates if Arduino was previously flagged offline
+                        if not websocket_manager.connections_status.get("arduino", False):
+                            websocket_manager.connections_status["arduino"] = True
+                            await websocket_manager.broadcast({
+                                "type": "connections",
+                                "data": websocket_manager.connections_status
+                            })
+                            print(f"[Hardware] Arduino connection re-established and broadcasted.", flush=True)
                     except Exception as pe:
                         print(f"[Telemetry Pipeline] Error processing telemetry: {pe}", flush=True)
                     finally:
@@ -234,11 +245,61 @@ async def read_serial_data():
                             pass
         except serial.SerialException as e:
             print(f"[Hardware] Serial read error: {e}", flush=True)
+            if websocket_manager.connections_status.get("arduino", False):
+                websocket_manager.connections_status["arduino"] = False
+                await websocket_manager.broadcast({
+                    "type": "connections",
+                    "data": websocket_manager.connections_status
+                })
             await asyncio.sleep(1)
         except Exception as e:
             print(f"[Hardware] Error reading Arduino data: {e}", flush=True)
         
         await asyncio.sleep(0.05)
+
+async def run_device_health_monitor():
+    """Background task to run the device health check periodically and notify clients of changes"""
+    from app.services.device_health_monitor import device_health_monitor
+    from app.models import Device
+    
+    print("[Health Monitor] Device health monitor background task started.", flush=True)
+    
+    while True:
+        await asyncio.sleep(5)
+        db = SessionLocal()
+        try:
+            res = device_health_monitor.check_devices(db)
+            if res.get("updated", 0) > 0 or not websocket_manager.connections_status.get("pc", False):
+                # Fetch latest online statuses from database
+                devices = db.query(Device).all()
+                arduino_online = websocket_manager.connections_status.get("arduino", False)
+                glasses_online = False
+                
+                for d in devices:
+                    dev_lower = d.device_id.lower()
+                    if "arduino" in dev_lower:
+                        arduino_online = d.is_online
+                    elif "glasses" in dev_lower or "meta" in dev_lower:
+                        glasses_online = d.is_online
+                
+                new_status = {
+                    "pc": True,
+                    "arduino": arduino_online,
+                    "glasses": glasses_online,
+                }
+                
+                # Check if connection state changed before broadcasting
+                if new_status != websocket_manager.connections_status:
+                    websocket_manager.connections_status = new_status
+                    await websocket_manager.broadcast({
+                        "type": "connections",
+                        "data": new_status
+                    })
+                    print(f"[Health Monitor] Connections status updated & broadcasted: {new_status}", flush=True)
+        except Exception as e:
+            print(f"[Health Monitor] Error checking device health: {e}", flush=True)
+        finally:
+            db.close()
 
 
 # ======================================================
@@ -253,6 +314,9 @@ async def lifespan(app: FastAPI):
     
     # Start the Arduino Serial Reader Task
     serial_task = asyncio.create_task(read_serial_data())
+    
+    # Start the Device Health Monitor Task
+    health_task = asyncio.create_task(run_device_health_monitor())
 
     db = SessionLocal()
 
@@ -278,8 +342,9 @@ async def lifespan(app: FastAPI):
 
     yield
 
-    # Clean up hardware task and connection on shutdown
+    # Clean up hardware tasks and connection on shutdown
     serial_task.cancel()
+    health_task.cancel()
     if arduino:
         arduino.close()
 

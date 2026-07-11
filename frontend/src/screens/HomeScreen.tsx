@@ -242,14 +242,28 @@ export default function HomeScreen() {
         )}
 
         {/* Live Network Sync Grid */}
-        <Text style={styles.sectionTitle}>Edge Link Registry</Text>
+        <View style={styles.sectionHeaderRow}>
+          <Text style={styles.sectionTitle}>Edge Link Registry</Text>
+          <TouchableOpacity 
+            style={styles.refreshBadgeBtn}
+            onPress={() => {
+              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+              onRefresh();
+            }}
+          >
+            <Ionicons name="sync-outline" size={12} color={COLORS.primary} />
+            <Text style={styles.refreshBadgeText}>SYNC NOW</Text>
+          </TouchableOpacity>
+        </View>
+
         <View style={styles.linkGrid}>
           {/* AI PC Card */}
-          <View style={styles.linkCard}>
+          <View style={[styles.linkCard, connections.pc && { borderColor: COLORS.primary + '80' }]}>
             <View style={[styles.linkIconBg, { backgroundColor: connections.pc ? COLORS.primary + '15' : COLORS.surfaceLight }]}>
               <Ionicons name="desktop-outline" size={20} color={connections.pc ? COLORS.primary : COLORS.textTertiary} />
             </View>
             <Text style={styles.linkLabel}>Snapdragon AI PC</Text>
+            <Text style={styles.linkSublabel}>{connections.pc ? 'Swarm Engine Active' : 'Disconnected'}</Text>
             <View style={styles.linkStatusRow}>
               <View style={[styles.dotSmall, { backgroundColor: connections.pc ? COLORS.success : COLORS.danger }]} />
               <Text style={[styles.linkStatusText, { color: connections.pc ? COLORS.success : COLORS.danger }]}>
@@ -260,13 +274,14 @@ export default function HomeScreen() {
 
           {/* Arduino Card */}
           <TouchableOpacity 
-            style={styles.linkCard}
+            style={[styles.linkCard, connections.arduino && { borderColor: COLORS.success + '80' }]}
             onPress={() => handleOpenDeviceHistory('TEST-ARDUINO-01')}
           >
             <View style={[styles.linkIconBg, { backgroundColor: connections.arduino ? COLORS.success + '15' : COLORS.surfaceLight }]}>
               <Ionicons name="hardware-chip-outline" size={20} color={connections.arduino ? COLORS.success : COLORS.textTertiary} />
             </View>
             <Text style={styles.linkLabel}>Arduino Uno Q</Text>
+            <Text style={styles.linkSublabel}>{connections.arduino ? 'COM3 Serial Link' : 'Disconnected'}</Text>
             <View style={styles.linkStatusRow}>
               <View style={[styles.dotSmall, { backgroundColor: connections.arduino ? COLORS.success : COLORS.danger }]} />
               <Text style={[styles.linkStatusText, { color: connections.arduino ? COLORS.success : COLORS.danger }]}>
@@ -276,11 +291,12 @@ export default function HomeScreen() {
           </TouchableOpacity>
 
           {/* Smart Glasses Card */}
-          <View style={styles.linkCard}>
+          <View style={[styles.linkCard, connections.glasses && { borderColor: COLORS.info + '80' }]}>
             <View style={[styles.linkIconBg, { backgroundColor: connections.glasses ? COLORS.info + '15' : COLORS.surfaceLight }]}>
               <Ionicons name="glasses-outline" size={20} color={connections.glasses ? COLORS.info : COLORS.textTertiary} />
             </View>
             <Text style={styles.linkLabel}>Meta AI Glasses</Text>
+            <Text style={styles.linkSublabel}>{connections.glasses ? 'Audio/Vision Feed' : 'Disconnected'}</Text>
             <View style={styles.linkStatusRow}>
               <View style={[styles.dotSmall, { backgroundColor: connections.glasses ? COLORS.success : COLORS.danger }]} />
               <Text style={[styles.linkStatusText, { color: connections.glasses ? COLORS.success : COLORS.danger }]}>
@@ -720,7 +736,29 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontWeight: 'bold',
     color: COLORS.textPrimary,
-    marginBottom: 4,
+    marginBottom: 2,
+  },
+  linkSublabel: {
+    fontSize: 8,
+    color: COLORS.textSecondary,
+    marginBottom: 6,
+    textAlign: 'center',
+  },
+  refreshBadgeBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: COLORS.primary + '15',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: COLORS.primary + '30',
+  },
+  refreshBadgeText: {
+    fontSize: 9,
+    fontWeight: 'bold',
+    color: COLORS.primary,
   },
   linkStatusRow: {
     flexDirection: 'row',

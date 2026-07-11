@@ -15,6 +15,7 @@ Responsibilities
 from collections import deque
 from datetime import datetime
 from typing import Any
+from app.core.config import settings
 
 
 class StateManager:
@@ -89,13 +90,13 @@ class StateManager:
         if telemetry.smoke_detected:
             return "CRITICAL"
 
-        if telemetry.gas_level >= 300:
+        if telemetry.gas_level >= settings.GAS_THRESHOLD:
             return "CRITICAL"
 
-        if telemetry.temperature >= 80:
+        if telemetry.temperature >= settings.TEMP_THRESHOLD:
             return "WARNING"
 
-        if telemetry.battery_level <= 15:
+        if telemetry.battery_level <= settings.BATTERY_THRESHOLD:
             return "LOW BATTERY"
 
         return "HEALTHY"
