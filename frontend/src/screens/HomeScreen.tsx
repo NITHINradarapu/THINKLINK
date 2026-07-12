@@ -106,23 +106,25 @@ export default function HomeScreen() {
     setRefreshing(false);
   };
 
-  // Calculate System Health — UP when safe, DOWN when incident active
+  // Calculate System Health — UP when safe/advisory/warning, DOWN when critical or offline
   let healthIsUp = true;
   let statusText = 'SYSTEM NOMINAL';
   let statusColor = COLORS.success;
   let statusGlow = COLORS.successGlow;
 
   if (activeIncident) {
-    healthIsUp = false;
     if (activeIncident.riskLevel === 'HIGH') {
+      healthIsUp = false;
       statusText = 'CRITICAL ALARM ACTIVE';
       statusColor = COLORS.danger;
       statusGlow = COLORS.dangerGlow;
     } else if (activeIncident.riskLevel === 'WARNING') {
+      healthIsUp = true;
       statusText = 'WARNING DETECTED';
       statusColor = COLORS.warning;
       statusGlow = COLORS.warningGlow;
     } else {
+      healthIsUp = true;
       statusText = 'ADVISORY ACTIVE';
       statusColor = COLORS.info;
       statusGlow = COLORS.infoGlow;
@@ -135,7 +137,7 @@ export default function HomeScreen() {
       statusColor = COLORS.danger;
       statusGlow = COLORS.dangerGlow;
     } else if (backendRisk === 'MEDIUM' || backendRisk === 'WARNING') {
-      healthIsUp = false;
+      healthIsUp = true;
       statusText = 'WARNING LEVEL';
       statusColor = COLORS.warning;
       statusGlow = COLORS.warningGlow;
