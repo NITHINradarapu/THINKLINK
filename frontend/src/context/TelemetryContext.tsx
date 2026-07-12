@@ -280,24 +280,6 @@ export function TelemetryProvider({ children }: { children: React.ReactNode }) {
           setAiStatus(data);
         } else if (type === 'actuator_states') {
           setActuators(data);
-        } else if (type === 'flame_alert') {
-          const now = Date.now();
-          // Rate-limit alerts to every 15 seconds to prevent user fatigue
-          if (now - lastNotificationTimeRef.current > 15000) {
-            lastNotificationTimeRef.current = now;
-            console.log('[WebSocket] Flame alert received, triggering native Vibration and Alert:', data);
-            
-            // Trigger intense hardware vibration pattern:
-            // Vibrate 1s, Pause 0.25s, Vibrate 1s, Pause 0.25s, Vibrate 1s
-            Vibration.vibrate([0, 1000, 250, 1000, 250, 1000]);
-
-            // Display native alert popup
-            Alert.alert(
-              data.title || "🔥 FLAME DETECTED — EVACUATE NOW",
-              data.body || "IR Sensor detected flame. Evacuate immediately!",
-              [{ text: "ACKNOWLEDGE", onPress: () => Vibration.cancel() }]
-            );
-          }
         } else if (type === 'new_incident') {
           let report: IncidentReport;
           if (data.incident_id) {

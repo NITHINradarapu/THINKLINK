@@ -177,43 +177,7 @@ class TelemetryPipelineService:
                 }
                 await websocket_manager.broadcast_telemetry(telemetry_dict)
 
-                # Broadcast immediate flame alert for local push notification if flame is detected
-                if flame_detected:
-                    from datetime import datetime
-                    flame_alert_msg = {
-                        "type": "flame_alert",
-                        "data": {
-                            "title": "🔥 FLAME DETECTED — EVACUATE NOW",
-                            "body": (
-                                f"IR sensor on {telemetry.device_id} detected flame! "
-                                f"Intensity: {flame_intensity}/1023 ({round(flame_proximity*100)}% proximity). "
-                                f"Buzzer ACTIVE. Evacuate the area immediately."
-                            ),
-                            "severity": "CRITICAL",
-                            "device_id": telemetry.device_id,
-                            "flame_intensity": flame_intensity,
-                            "flame_proximity": round(flame_proximity, 3),
-                            "timestamp": datetime.utcnow().isoformat() + "Z",
-                        }
-                    }
-                    await websocket_manager.broadcast(flame_alert_msg)
-                    print(f"[FLAME ALERT] Push notification broadcast sent to all mobile clients (HTTP).", flush=True)
 
-                    # Also store in notification_service so it appears in history
-                    notification_service._latest_notification = {
-                        "request_id": f"FLAME-{telemetry.device_id}-{int(flame_intensity)}",
-                        "incident_id": f"flame-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}",
-                        "device_id": telemetry.device_id,
-                        "risk_level": "HIGH",
-                        "summary": f"FLAME DETECTED on {telemetry.device_id}! Intensity {flame_intensity}/1023. Buzzer activated. Evacuate immediately.",
-                        "recommended_actions": [
-                            "Evacuate the area immediately",
-                            "Activate fire suppression system",
-                            "Call emergency services (Fire Department)",
-                            "Cut power to affected machinery",
-                        ],
-                        "created_at": datetime.utcnow().isoformat(),
-                    }
             except Exception as ws_err:
                 log_error(request_id, f"WebSocket telemetry broadcast/alert failed: {ws_err}")
 

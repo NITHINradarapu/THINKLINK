@@ -284,46 +284,7 @@ async def process_arduino_payload(raw_data: str):
     }
     await websocket_manager.broadcast_telemetry(telemetry_broadcast)
 
-    # 5. Flame Alert: push a dedicated WebSocket notification to the mobile app
-    #    This fires even when the app is in the background — the frontend listens for
-    #    type="flame_alert" and fires a local push notification with sound + vibration.
-    if flame_detected:
-        from datetime import datetime
-        flame_alert_msg = {
-            "type": "flame_alert",
-            "data": {
-                "title": "🔥 FLAME DETECTED — EVACUATE NOW",
-                "body": (
-                    f"IR sensor on {device_id} detected flame! "
-                    f"Intensity: {flame_intensity}/1023 ({round(flame_proximity*100)}% proximity). "
-                    f"Buzzer ACTIVE. Evacuate the area immediately."
-                ),
-                "severity": "CRITICAL",
-                "device_id": device_id,
-                "flame_intensity": flame_intensity,
-                "flame_proximity": round(flame_proximity, 3),
-                "timestamp": datetime.utcnow().isoformat() + "Z",
-            }
-        }
-        await websocket_manager.broadcast(flame_alert_msg)
-        print(f"[FLAME ALERT] Push notification broadcast sent to all mobile clients.", flush=True)
 
-        # Also store in the notification service so it appears in notification history
-        from app.services.notification_service import notification_service
-        notification_service._latest_notification = {
-            "request_id": f"FLAME-{device_id}-{int(flame_intensity)}",
-            "incident_id": f"flame-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}",
-            "device_id": device_id,
-            "risk_level": "HIGH",
-            "summary": f"FLAME DETECTED on {device_id}! Intensity {flame_intensity}/1023. Buzzer activated. Evacuate immediately.",
-            "recommended_actions": [
-                "Evacuate the area immediately",
-                "Activate fire suppression system",
-                "Call emergency services (Fire Department)",
-                "Cut power to affected machinery",
-            ],
-            "created_at": datetime.utcnow().isoformat(),
-        }
 
 def read_serial_data_sync():
     """Background thread function to read live Arduino telemetry synchronously without blocking FastAPI's event loop"""
