@@ -26,20 +26,35 @@ try:
         temp_reading = max(20.0, min(35.0, temp + random.uniform(-0.5, 0.5)))
         gas_reading = max(50.0, min(180.0, gas + random.uniform(-5.0, 5.0)))
         smoke_reading = False
+        flame_reading = False
+        flame_intensity = 0
+        flame_proximity = 0.0
         
-        # Every 10th reading (30 seconds), trigger a critical anomaly to automatically invoke the AI Swarm!
+        # Every 10th reading (30 seconds), trigger a critical gas anomaly
         if step % 10 == 0:
             print("\n[!!] [Simulation] Triggering CRITICAL GAS & SMOKE Anomaly!")
             gas_reading = 650.0
             smoke_reading = True
             temp_reading = 82.4
         
+        # Every 15th reading (45 seconds), trigger a critical flame/fire anomaly
+        if step % 15 == 0:
+            print("\n[🔥] [Simulation] Triggering CRITICAL FLAME / FIRE ANOMALY!")
+            flame_reading = True
+            flame_intensity = 920
+            flame_proximity = 0.90
+            temp_reading = 94.5
+            smoke_reading = True
+
         payload = {
             "device_id": "TEST-ARDUINO-01",
             "temperature": round(temp_reading, 2),
             "humidity": round(humidity, 2),
             "gas_level": round(gas_reading, 2),
             "smoke_detected": smoke_reading,
+            "flame_detected": flame_reading,
+            "flame_intensity": flame_intensity,
+            "flame_proximity": round(flame_proximity, 2),
             "battery_level": 95
         }
         
@@ -49,7 +64,7 @@ try:
             
             # Print status log
             status_desc = "AI Swarm Invoked!" if response_data.get("ai_triggered") else "Nominal"
-            print(f"[{time.strftime('%H:%M:%S')}] Send OK -> Temp: {payload['temperature']}°C, Gas: {payload['gas_level']} PPM, Smoke: {payload['smoke_detected']} | Pipeline State: {status_desc}")
+            print(f"[{time.strftime('%H:%M:%S')}] Send OK -> Temp: {payload['temperature']}°C, Gas: {payload['gas_level']} PPM, Smoke: {payload['smoke_detected']}, Flame: {payload['flame_detected']} (Intensity: {payload['flame_intensity']}) | Pipeline State: {status_desc}")
             
         except Exception as e:
             print(f"[{time.strftime('%H:%M:%S')}] Connection failed (Is your backend uvicorn server running?): {e}")

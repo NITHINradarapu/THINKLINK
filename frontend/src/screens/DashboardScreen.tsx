@@ -31,6 +31,9 @@ export default function DashboardScreen() {
         humidity: sensorData.humidity,
         gas_level: sensorData.gas,
         smoke_detected: sensorData.smoke_detected,
+        flame_detected: sensorData.flame_detected,
+        flame_intensity: sensorData.flame_intensity,
+        flame_proximity: sensorData.flame_proximity,
         battery_level: sensorData.battery_level || 90,
         vibration: sensorData.vibration,
       });
@@ -145,6 +148,59 @@ export default function DashboardScreen() {
                 { color: sensorData.smoke_detected ? COLORS.danger : COLORS.success }
               ]}>
                 {sensorData.smoke_detected ? 'ALERT' : 'OK'}
+              </Text>
+            </View>
+          </View>
+        </View>
+
+        {/* ── Flame Sensor Card ─────────────────────────────────── */}
+        <View style={[
+          styles.smokeCard,
+          sensorData.flame_detected && {
+            borderColor: COLORS.danger,
+            backgroundColor: COLORS.dangerGlow,
+          }
+        ]}>
+          <View style={styles.smokeRow}>
+            <Ionicons
+              name={sensorData.flame_detected ? 'flame' : 'flame-outline'}
+              size={22}
+              color={sensorData.flame_detected ? COLORS.danger : COLORS.success}
+            />
+            <View style={{ flex: 1, marginLeft: 10 }}>
+              <Text style={styles.smokeTitle}>IR Flame Sensor (KY-026)</Text>
+              <Text style={[
+                styles.smokeStatus,
+                { color: sensorData.flame_detected ? COLORS.danger : COLORS.success }
+              ]}>
+                {sensorData.flame_detected
+                  ? `🔥 FLAME DETECTED — Intensity ${sensorData.flame_intensity}/1023`
+                  : `✓ CLEAR — No Flame (intensity: ${sensorData.flame_intensity}/1023)`}
+              </Text>
+              {/* Intensity progress bar */}
+              <View style={styles.flameBarBg}>
+                <View style={[
+                  styles.flameBarFill,
+                  {
+                    width: `${Math.min((sensorData.flame_intensity / 1023) * 100, 100)}%` as any,
+                    backgroundColor: sensorData.flame_detected ? COLORS.danger : COLORS.success,
+                  }
+                ]} />
+              </View>
+              <Text style={styles.flameProximity}>
+                Proximity: {(sensorData.flame_proximity * 100).toFixed(1)}%
+              </Text>
+            </View>
+            <View style={[
+              styles.smokeBadge,
+              { backgroundColor: sensorData.flame_detected ? COLORS.dangerGlow : COLORS.successGlow,
+                borderColor: sensorData.flame_detected ? COLORS.danger : COLORS.success }
+            ]}>
+              <Text style={[
+                styles.smokeBadgeText,
+                { color: sensorData.flame_detected ? COLORS.danger : COLORS.success }
+              ]}>
+                {sensorData.flame_detected ? 'ALARM' : 'SAFE'}
               </Text>
             </View>
           </View>
@@ -392,5 +448,22 @@ const styles = StyleSheet.create({
     fontSize: 11,
     color: COLORS.danger,
     flex: 1,
+  },
+  // Flame sensor intensity bar
+  flameBarBg: {
+    height: 5,
+    backgroundColor: COLORS.surfaceLight,
+    borderRadius: 3,
+    marginTop: 6,
+    overflow: 'hidden',
+  },
+  flameBarFill: {
+    height: '100%',
+    borderRadius: 3,
+  },
+  flameProximity: {
+    fontSize: 10,
+    color: COLORS.textSecondary,
+    marginTop: 3,
   },
 });

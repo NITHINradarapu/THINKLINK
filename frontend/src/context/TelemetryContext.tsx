@@ -2,6 +2,20 @@ import React, { createContext, useContext, useState, useEffect, useCallback, use
 import { Platform } from 'react-native';
 import { api, setApiBaseUrl, getApiBaseUrl, mapIncidentResponseToReport, ApiError } from '../services/api';
 import type { IncidentResponse, DashboardSummary, DashboardStatistics, RiskDistribution, NotificationPayload } from '../services/types';
+import * as Notifications from 'expo-notifications';
+
+// Configure notification behavior for foreground notifications
+if (Platform.OS !== 'web') {
+  Notifications.setNotificationHandler({
+    handleNotification: async () => ({
+      shouldShowAlert: true,
+      shouldPlaySound: true,
+      shouldSetBadge: false,
+      shouldShowBanner: true,
+      shouldShowList: true,
+    }),
+  });
+}
 
 // ─── Frontend Data Interfaces ────────────────────────────────
 
@@ -12,6 +26,10 @@ export interface TelemetryData {
   humidity: number;
   smoke_detected: boolean;
   battery_level: number;
+  // Flame sensor (KY-026 / YG1006 IR)
+  flame_detected: boolean;   // true when IR sensor detects flame
+  flame_intensity: number;   // 0–1023 (higher = more intense / closer flame)
+  flame_proximity: number;   // 0.0–1.0 convenience float
 }
 
 export interface HistoricalReading {
@@ -114,9 +132,9 @@ const TelemetryContext = createContext<TelemetryContextProps | undefined>(undefi
 // Android EMULATOR → 10.0.2.2 routes to host machine localhost
 // iOS / Web → localhost
 const DEFAULT_API_URL =
-  Platform.OS === 'android'
-    ? 'http://10.91.48.73:8000'  // PC LAN IP — update this if your machine's IP changes
-    : 'http://localhost:8000';
+  Platform.OS === 'web'
+    ? 'http://localhost:8000'
+    : 'http://10.91.48.73:8000'; // PC LAN IP for physical mobile devices (iOS/Android) over Wi-Fi
 
 // Helper to pre-populate mock historical telemetry data
 const generateInitialHistory = (): HistoricalReading[] => {
@@ -140,21 +158,11 @@ const INCIDENTS_POLL_INTERVAL = 5_000;   // 5s
 const NOTIFICATION_POLL_INTERVAL = 8_000; // 8s
 
 const getWebSocketUrl = (httpUrl: string): string => {
-  // Guard: ensure we are always pointing at the FastAPI backend (port 8000),
-  // never accidentally at the Expo Metro bundler (port 8081).
-  let safeUrl = httpUrl;
-  try {
-    const parsed = new URL(httpUrl);
-    if (parsed.port === '8081') {
-      // Expo Metro URL was passed — redirect to backend port
-      parsed.port = '8000';
-      safeUrl = parsed.toString().replace(/\/$/, '');
-      console.warn(
-        `[WebSocket] Detected Metro port 8081 in URL — correcting to backend port 8000: ${safeUrl}`
-      );
-    }
-  } catch (_) {
-    // URL parsing failed; proceed with original
+  // Clean up metro port 8081 if accidentally supplied
+  let safeUrl = httpUrl.trim();
+  if (safeUrl.includes(':8081')) {
+    safeUrl = safeUrl.replace(':8081', ':8000');
+    console.warn(`[WebSocket] Corrected Metro port 8081 to backend port 8000: ${safeUrl}`);
   }
   const wsUrl = safeUrl.replace(/^http:/, 'ws:').replace(/^https:/, 'wss:');
   return `${wsUrl}/ws`;
@@ -183,6 +191,9 @@ export function TelemetryProvider({ children }: { children: React.ReactNode }) {
     humidity: 0.0,
     smoke_detected: false,
     battery_level: 0,
+    flame_detected: false,
+    flame_intensity: 0,
+    flame_proximity: 0.0,
   });
 
   const [telemetryHistory, setTelemetryHistory] = useState<HistoricalReading[]>(generateInitialHistory);
@@ -213,6 +224,30 @@ export function TelemetryProvider({ children }: { children: React.ReactNode }) {
 
   const wsRef = useRef<WebSocket | null>(null);
   const dismissedIncidentIdRef = useRef<string | null>(null);
+  const lastNotificationTimeRef = useRef<number>(0);
+
+  // Request local notification permissions on startup
+  useEffect(() => {
+    async function requestPermissions() {
+      if (Platform.OS === 'web') return;
+      try {
+        const { status: existingStatus } = await Notifications.getPermissionsAsync();
+        let finalStatus = existingStatus;
+        if (existingStatus !== 'granted') {
+          const { status } = await Notifications.requestPermissionsAsync();
+          finalStatus = status;
+        }
+        if (finalStatus !== 'granted') {
+          console.warn('[Notifications] Local notification permission denied.');
+        } else {
+          console.log('[Notifications] Local notification permission granted.');
+        }
+      } catch (err) {
+        console.error('[Notifications] Error requesting notification permission:', err);
+      }
+    }
+    requestPermissions();
+  }, []);
 
   // ────────────────────────────────────────────────────────
   // 1. Native WebSocket connection (real-time telemetry channel)
@@ -256,12 +291,15 @@ export function TelemetryProvider({ children }: { children: React.ReactNode }) {
 
         if (type === 'telemetry') {
           setSensorData(prev => ({
-            temperature: data.temperature ?? prev.temperature,
-            gas: data.gas ?? data.gas_level ?? prev.gas,
-            vibration: data.vibration ?? prev.vibration,
-            humidity: data.humidity ?? prev.humidity,
-            smoke_detected: data.smoke_detected ?? prev.smoke_detected,
-            battery_level: data.battery_level ?? prev.battery_level,
+            temperature:     data.temperature     ?? prev.temperature,
+            gas:             data.gas ?? data.gas_level ?? prev.gas,
+            vibration:       data.vibration       ?? prev.vibration,
+            humidity:        data.humidity        ?? prev.humidity,
+            smoke_detected:  data.smoke_detected  ?? prev.smoke_detected,
+            battery_level:   data.battery_level   ?? prev.battery_level,
+            flame_detected:  data.flame_detected  ?? prev.flame_detected,
+            flame_intensity: data.flame_intensity ?? prev.flame_intensity,
+            flame_proximity: data.flame_proximity ?? prev.flame_proximity,
           }));
           setTelemetryHistory(prev => {
             const newReading: HistoricalReading = {
@@ -279,6 +317,22 @@ export function TelemetryProvider({ children }: { children: React.ReactNode }) {
           setAiStatus(data);
         } else if (type === 'actuator_states') {
           setActuators(data);
+        } else if (type === 'flame_alert') {
+          const now = Date.now();
+          // Rate-limit local push notifications to every 15 seconds to prevent sound spam
+          if (now - lastNotificationTimeRef.current > 15000) {
+            lastNotificationTimeRef.current = now;
+            console.log('[WebSocket] Flame alert received, triggering local push notification:', data);
+            Notifications.scheduleNotificationAsync({
+              content: {
+                title: data.title || "🔥 FLAME DETECTED — EVACUATE NOW",
+                body: data.body || "IR Sensor detected flame. Evacuate immediately!",
+                sound: true,
+                priority: Notifications.AndroidNotificationPriority.MAX,
+              },
+              trigger: null,
+            }).catch(err => console.error('[Notifications] Failed to schedule alert:', err));
+          }
         } else if (type === 'new_incident') {
           let report: IncidentReport;
           if (data.incident_id) {
@@ -353,6 +407,9 @@ export function TelemetryProvider({ children }: { children: React.ReactNode }) {
           const newConnections = { ...prev };
           for (const device of deviceList) {
             const id = device.device_id?.toLowerCase() || '';
+            if (id.startsWith('test-')) {
+              continue;
+            }
             const isOnline = device.status === 'online' || device.status === 'active';
             if (id.includes('arduino')) {
               newConnections.arduino = isOnline;

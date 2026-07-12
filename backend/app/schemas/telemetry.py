@@ -48,6 +48,21 @@ class TelemetryRequest(BaseModel):
         examples=[0.05],
     )
 
+    flame_detected: Optional[bool] = Field(
+        default=False,
+        examples=[False],
+    )
+
+    flame_intensity: Optional[int] = Field(
+        default=0,
+        examples=[0],
+    )
+
+    flame_proximity: Optional[float] = Field(
+        default=0.0,
+        examples=[0.0],
+    )
+
     @model_validator(mode='before')
     @classmethod
     def check_aliases_and_defaults(cls, data):
@@ -60,6 +75,8 @@ class TelemetryRequest(BaseModel):
                 data["humidity"] = 50.0
             if "smoke_detected" not in data:
                 data["smoke_detected"] = data.get("gas_level", 0.0) > 300.0
+            if data.get("flame_detected", False) or data.get("flame", False):
+                data["smoke_detected"] = True
             if "battery_level" not in data:
                 data["battery_level"] = 100
         return data

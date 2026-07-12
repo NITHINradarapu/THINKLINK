@@ -32,9 +32,9 @@ import type {
 // ─── Base URL Management ─────────────────────────────────────
 
 const DEFAULT_API_BASE_URL =
-  Platform.OS === 'android'
-    ? 'http://10.91.48.73:8000'  // PC LAN IP for physical Android devices over WiFi
-    : 'http://localhost:8000'; // iOS / Web
+  Platform.OS === 'web'
+    ? 'http://localhost:8000'
+    : 'http://10.91.48.73:8000'; // PC LAN IP for physical mobile devices (iOS/Android) over Wi-Fi
 
 let _baseUrl: string = DEFAULT_API_BASE_URL;
 

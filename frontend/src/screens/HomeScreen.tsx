@@ -281,7 +281,7 @@ export default function HomeScreen() {
           {/* Arduino Card */}
           <TouchableOpacity 
             style={[styles.linkCard, connections.arduino && { borderColor: COLORS.success + '80' }]}
-            onPress={() => handleOpenDeviceHistory('TEST-ARDUINO-01')}
+            onPress={() => handleOpenDeviceHistory('ARDUINO-01')}
           >
             <View style={[styles.linkIconBg, { backgroundColor: connections.arduino ? COLORS.success + '15' : COLORS.surfaceLight }]}>
               <Ionicons name="hardware-chip-outline" size={20} color={connections.arduino ? COLORS.success : COLORS.textTertiary} />

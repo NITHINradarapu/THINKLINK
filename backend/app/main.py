@@ -181,12 +181,28 @@ async def process_arduino_payload(raw_data: str):
     # Gas / Smoke / Sound / MQ sensor
     gas_val = float(data_dict.get("gas_level", data_dict.get("gas", data_dict.get("sound", 120.0))))
     
-    # Smoke / Flame / Fire / Safety breach binary alerts
+    # Smoke / Gas breach binary alerts (separate from flame)
     smoke_detected = bool(data_dict.get("smoke_detected", data_dict.get("smoke", False)))
-    if (data_dict.get("flame_detected", 0) > 0 or 
-        data_dict.get("safety_breach", 1) == 0 or 
-        data_dict.get("flame", False) or 
-        data_dict.get("fire", False)):
+    # High gas level auto-flags smoke
+    if gas_val >= 400:
+        smoke_detected = True
+
+    # ── Flame Sensor (KY-026 / YG1006 IR) ───────────────────────────────
+    # flame_detected: boolean — D0 or analog threshold triggered
+    # flame_intensity: 0–1023 (inverted ADC; higher = more intense/closer flame)
+    # flame_proximity: 0.0–1.0 convenience float
+    flame_detected  = bool(
+        data_dict.get("flame_detected", False) or
+        data_dict.get("flame",          False) or
+        data_dict.get("fire",           False) or
+        data_dict.get("safety_breach",  1) == 0
+    )
+    flame_intensity = int(data_dict.get("flame_intensity", 0))
+    flame_raw       = int(data_dict.get("flame_raw",       1023))  # raw ADC (debug)
+    flame_proximity = float(data_dict.get("flame_proximity", flame_intensity / 1023.0))
+
+    # Flame combustion produces gases → always set smoke_detected=True when flame found
+    if flame_detected:
         smoke_detected = True
 
     # Humidity
@@ -236,6 +252,14 @@ async def process_arduino_payload(raw_data: str):
 
     # 3. Check thresholds locally for immediate buzzer and LED control
     checker_res = ThresholdChecker.check(telemetry_obj)
+
+    # Flame sensor: always trigger alarm immediately — no AI delay needed
+    if flame_detected:
+        checker_res["triggered"] = True
+        checker_res["reasons"].insert(0, "FLAME DETECTED — IR sensor triggered")
+        checker_res["score"] = min(checker_res["score"] + 100, 100)
+        print(f"[FLAME ALERT] Flame detected! intensity={flame_intensity}/1023 proximity={flame_proximity:.2f}", flush=True)
+
     if checker_res["triggered"]:
         control_system_state(True)
         print(f"[Hardware] Threshold crossed: {checker_res['reasons']}. Alarm status: ACTIVE.", flush=True)
@@ -244,30 +268,84 @@ async def process_arduino_payload(raw_data: str):
 
     # 4. Broadcast the normalized telemetry payload to all connected websocket clients via manager
     telemetry_broadcast = {
-        "device_id": device_id,
-        "temperature": temp_val,
-        "humidity": humidity_val,
-        "gas": gas_val,
-        "gas_level": gas_val,
+        "device_id":      device_id,
+        "temperature":    temp_val,
+        "humidity":       humidity_val,
+        "gas":            gas_val,
+        "gas_level":      gas_val,
         "smoke_detected": smoke_detected,
-        "battery_level": battery_val,
-        "vibration": vibration_val,
-        "buzzer_active": checker_res["triggered"],
-        "led_red_active": checker_res["triggered"]
+        "flame_detected":  flame_detected,
+        "flame_intensity": flame_intensity,
+        "flame_proximity": round(flame_proximity, 3),
+        "vibration":      vibration_val,
+        "battery_level":  battery_val,
+        "buzzer_active":  checker_res["triggered"],
+        "led_red_active": checker_res["triggered"],
     }
     await websocket_manager.broadcast_telemetry(telemetry_broadcast)
+
+    # 5. Flame Alert: push a dedicated WebSocket notification to the mobile app
+    #    This fires even when the app is in the background — the frontend listens for
+    #    type="flame_alert" and fires a local push notification with sound + vibration.
+    if flame_detected:
+        from datetime import datetime
+        flame_alert_msg = {
+            "type": "flame_alert",
+            "data": {
+                "title": "🔥 FLAME DETECTED — EVACUATE NOW",
+                "body": (
+                    f"IR sensor on {device_id} detected flame! "
+                    f"Intensity: {flame_intensity}/1023 ({round(flame_proximity*100)}% proximity). "
+                    f"Buzzer ACTIVE. Evacuate the area immediately."
+                ),
+                "severity": "CRITICAL",
+                "device_id": device_id,
+                "flame_intensity": flame_intensity,
+                "flame_proximity": round(flame_proximity, 3),
+                "timestamp": datetime.utcnow().isoformat() + "Z",
+            }
+        }
+        await websocket_manager.broadcast(flame_alert_msg)
+        print(f"[FLAME ALERT] Push notification broadcast sent to all mobile clients.", flush=True)
+
+        # Also store in the notification service so it appears in notification history
+        from app.services.notification_service import notification_service
+        notification_service._latest_notification = {
+            "request_id": f"FLAME-{device_id}-{int(flame_intensity)}",
+            "incident_id": f"flame-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}",
+            "device_id": device_id,
+            "risk_level": "HIGH",
+            "summary": f"FLAME DETECTED on {device_id}! Intensity {flame_intensity}/1023. Buzzer activated. Evacuate immediately.",
+            "recommended_actions": [
+                "Evacuate the area immediately",
+                "Activate fire suppression system",
+                "Call emergency services (Fire Department)",
+                "Cut power to affected machinery",
+            ],
+            "created_at": datetime.utcnow().isoformat(),
+        }
 
 def read_serial_data_sync():
     """Background thread function to read live Arduino telemetry synchronously without blocking FastAPI's event loop"""
     import json
     from app.utils import loop as loop_module
-    global last_process_time
+    global last_process_time, arduino
 
     print("[Hardware Thread] Serial reader thread started.", flush=True)
     
     while True:
         if not arduino:
-            time.sleep(1)
+            if connect_arduino():
+                # Reconnection successful -> broadcast connection status
+                if loop_module.main_loop:
+                    asyncio.run_coroutine_threadsafe(
+                        websocket_manager.broadcast({
+                            "type": "connections",
+                            "data": websocket_manager.connections_status
+                        }),
+                        loop_module.main_loop
+                    )
+            time.sleep(2)
             continue
 
         try:
@@ -288,12 +366,20 @@ def read_serial_data_sync():
                             )
         except serial.SerialException as e:
             print(f"[Hardware Thread] Serial read error: {e}", flush=True)
+            # Safely close and reset the serial port object to trigger reconnection logic
+            if arduino:
+                try:
+                    arduino.close()
+                except Exception:
+                    pass
+                arduino = None
+            
             if loop_module.main_loop:
                 asyncio.run_coroutine_threadsafe(
                     handle_serial_disconnect(),
                     loop_module.main_loop
                 )
-            time.sleep(1)
+            time.sleep(2)
         except Exception as e:
             print(f"[Hardware Thread] Error reading Arduino data: {e}", flush=True)
         
