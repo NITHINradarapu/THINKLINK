@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { StyleSheet, Text, View, SafeAreaView, ScrollView, TouchableOpacity, LayoutAnimation, Platform, UIManager, RefreshControl, Modal, TextInput, Alert, ActivityIndicator, Switch } from 'react-native';
+import { StyleSheet, Text, View, SafeAreaView, ScrollView, TouchableOpacity, LayoutAnimation, Platform, UIManager, RefreshControl, Modal, TextInput, Alert, ActivityIndicator, Switch, Image } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { COLORS, SPACING, TYPOGRAPHY } from '../theme/theme';
 import { useTelemetry, IncidentReport } from '../context/TelemetryContext';
 import * as Haptics from 'expo-haptics';
+import * as ImagePicker from 'expo-image-picker';
 
 // Enable layout animations for expanding items on Android
 if (Platform.OS === 'android') {
@@ -22,6 +23,7 @@ export default function IncidentsScreen() {
     resolveIncidentById,
     refreshIncidents,
     submitReport,
+    askAI,
   } = useTelemetry();
 
   const [expandedIncidentId, setExpandedIncidentId] = useState<string | null>(null);
@@ -35,6 +37,120 @@ export default function IncidentsScreen() {
   const [remarks, setRemarks] = useState('');
   const [includeAudio, setIncludeAudio] = useState(false);
   const [submittingReport, setSubmittingReport] = useState(false);
+
+  // Visual Q&A states
+  const [qaImage, setQaImage] = useState<any>(null);
+  const [qaQuestion, setQaQuestion] = useState('');
+  const [qaAnswer, setQaAnswer] = useState<string | null>(null);
+  const [qaCaption, setQaCaption] = useState<string | null>(null);
+  const [loadingQA, setLoadingQA] = useState(false);
+
+  const handleTakePhoto = async () => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+    
+    const { status } = await ImagePicker.requestCameraPermissionsAsync();
+    if (status !== 'granted') {
+      Alert.alert('Permission Denied', 'Camera permission is required to click a photo.');
+      return;
+    }
+
+    const result = await ImagePicker.launchCameraAsync({
+      mediaTypes: ['images'],
+      allowsEditing: true,
+      quality: 0.8,
+    });
+
+    if (!result.canceled && result.assets && result.assets.length > 0) {
+      const asset = result.assets[0];
+      if (Platform.OS === 'web') {
+        setQaImage({ uri: asset.uri });
+      } else {
+        setQaImage({
+          uri: asset.uri,
+          name: 'photo.jpg',
+          type: 'image/jpeg',
+        });
+      }
+      setQaAnswer(null);
+      setQaCaption(null);
+    }
+  };
+
+  const handleSelectPhoto = async () => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+    
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (status !== 'granted') {
+      Alert.alert('Permission Denied', 'Media library permission is required to choose a photo.');
+      return;
+    }
+
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'],
+      allowsEditing: true,
+      quality: 0.8,
+    });
+
+    if (!result.canceled && result.assets && result.assets.length > 0) {
+      const asset = result.assets[0];
+      if (Platform.OS === 'web') {
+        setQaImage({ uri: asset.uri });
+      } else {
+        setQaImage({
+          uri: asset.uri,
+          name: 'photo.jpg',
+          type: 'image/jpeg',
+        });
+      }
+      setQaAnswer(null);
+      setQaCaption(null);
+    }
+  };
+
+  const handleSubmitQA = async () => {
+    if (!qaImage) {
+      Alert.alert('Image Required', 'Please snap or select a photo first.');
+      return;
+    }
+    if (!qaQuestion.trim()) {
+      Alert.alert('Question Required', 'Please type a question for the AI.');
+      return;
+    }
+
+    setLoadingQA(true);
+    setQaAnswer(null);
+    setQaCaption(null);
+    
+    try {
+      let imageToSend: any = null;
+      if (Platform.OS === 'web') {
+        const response = await fetch(qaImage.uri);
+        imageToSend = await response.blob();
+      } else {
+        imageToSend = qaImage;
+      }
+
+      const res = await askAI(imageToSend, qaQuestion);
+      if (res && res.answer) {
+        setQaAnswer(res.answer);
+        setQaCaption(res.caption);
+      } else {
+        setQaAnswer('AI did not return a valid answer.');
+      }
+    } catch (err: any) {
+      console.error(err);
+      setQaAnswer(`Failed to get answer: ${err.message || 'Unknown error'}`);
+    } finally {
+      setLoadingQA(false);
+    }
+  };
+
+  const handleClearQA = () => {
+    setQaImage(null);
+    setQaQuestion('');
+    setQaAnswer(null);
+    setQaCaption(null);
+  };
 
   const handleSubmitReport = async () => {
     if (!remarks.trim()) {
@@ -218,6 +334,87 @@ export default function IncidentsScreen() {
         }
       >
         
+        {/* VISUAL Q&A SECTION */}
+        <View style={[styles.card, styles.qaCard]}>
+          <View style={styles.qaHeader}>
+            <Ionicons name="eye-outline" size={20} color={COLORS.primary} />
+            <Text style={styles.qaTitle}>AI Visual Inspector</Text>
+          </View>
+          <Text style={styles.qaDesc}>
+            Take a photo of any equipment, pipeline, or machine and ask our local AI PC to inspect it.
+          </Text>
+
+          {/* Action Row for Camera / Select */}
+          <View style={styles.qaActionRow}>
+            <TouchableOpacity style={styles.qaMediaBtn} onPress={handleTakePhoto}>
+              <Ionicons name="camera-outline" size={18} color="#FFFFFF" />
+              <Text style={styles.qaMediaBtnText}>TAKE PHOTO</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity style={[styles.qaMediaBtn, styles.qaMediaBtnOutline]} onPress={handleSelectPhoto}>
+              <Ionicons name="image-outline" size={18} color={COLORS.textSecondary} />
+              <Text style={[styles.qaMediaBtnText, { color: COLORS.textSecondary }]}>GALLERY</Text>
+            </TouchableOpacity>
+          </View>
+
+          {/* Image Preview */}
+          {qaImage && (
+            <View style={styles.previewContainer}>
+              <Image source={{ uri: qaImage.uri }} style={styles.previewImage} />
+              <TouchableOpacity style={styles.previewCloseBtn} onPress={handleClearQA}>
+                <Ionicons name="close" size={16} color="#FFFFFF" />
+              </TouchableOpacity>
+            </View>
+          )}
+
+          {/* Input Box for Question */}
+          {qaImage && (
+            <View style={styles.qaInputContainer}>
+              <TextInput
+                style={styles.qaTextInput}
+                value={qaQuestion}
+                onChangeText={setQaQuestion}
+                placeholder="Ask a question (e.g. 'Is there misalignment here?')"
+                placeholderTextColor={COLORS.textTertiary}
+                multiline
+              />
+              <View style={styles.qaButtonRow}>
+                <TouchableOpacity 
+                  style={[styles.qaSubmitBtn, loadingQA && styles.qaSubmitBtnDisabled]} 
+                  onPress={handleSubmitQA}
+                  disabled={loadingQA}
+                >
+                  {loadingQA ? (
+                    <ActivityIndicator size="small" color="#FFFFFF" />
+                  ) : (
+                    <>
+                      <Ionicons name="send" size={14} color="#FFFFFF" style={{ marginRight: 6 }} />
+                      <Text style={styles.qaSubmitBtnText}>ASK AI PC</Text>
+                    </>
+                  )}
+                </TouchableOpacity>
+              </View>
+            </View>
+          )}
+
+          {/* Answer Card */}
+          {qaAnswer && (
+            <View style={styles.qaAnswerCard}>
+              <View style={styles.qaAnswerHeader}>
+                <Ionicons name="chatbubble-ellipses-outline" size={16} color={COLORS.success} />
+                <Text style={styles.qaAnswerHeaderText}>Snapdragon AI Response</Text>
+              </View>
+              {qaCaption && (
+                <Text style={styles.qaCaptionText}>
+                  <Text style={{ fontWeight: 'bold', color: COLORS.textSecondary }}>Visual Scan: </Text>
+                  {qaCaption}
+                </Text>
+              )}
+              <Text style={styles.qaAnswerText}>{qaAnswer}</Text>
+            </View>
+          )}
+        </View>
+
         {/* ACTIVE INCIDENT SECTION */}
         {activeIncident ? (
           <View style={[styles.card, styles.activeIncidentCard]}>
@@ -1038,5 +1235,146 @@ const styles = StyleSheet.create({
     color: COLORS.textSecondary,
     lineHeight: 18,
     marginLeft: SPACING.sm,
+  },
+  qaCard: {
+    borderColor: COLORS.primaryGlow,
+    borderWidth: 1.5,
+    marginBottom: SPACING.lg,
+  },
+  qaHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: SPACING.sm,
+    gap: SPACING.sm,
+  },
+  qaTitle: {
+    ...TYPOGRAPHY.h3,
+    fontWeight: 'bold',
+    color: COLORS.primary,
+  },
+  qaDesc: {
+    ...TYPOGRAPHY.bodySecondary,
+    color: COLORS.textSecondary,
+    marginBottom: SPACING.md,
+    lineHeight: 18,
+  },
+  qaActionRow: {
+    flexDirection: 'row',
+    gap: SPACING.sm,
+    marginBottom: SPACING.md,
+  },
+  qaMediaBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    backgroundColor: COLORS.primary,
+    height: 40,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: SPACING.xs,
+  },
+  qaMediaBtnOutline: {
+    backgroundColor: 'transparent',
+    borderWidth: 1,
+    borderColor: COLORS.border,
+  },
+  qaMediaBtnText: {
+    color: '#FFFFFF',
+    fontWeight: 'bold',
+    fontSize: 12,
+  },
+  previewContainer: {
+    width: '100%',
+    height: 200,
+    borderRadius: 10,
+    overflow: 'hidden',
+    marginBottom: SPACING.md,
+    position: 'relative',
+    borderWidth: 1,
+    borderColor: COLORS.border,
+  },
+  previewImage: {
+    width: '100%',
+    height: '100%',
+    resizeMode: 'cover',
+  },
+  previewCloseBtn: {
+    position: 'absolute',
+    top: 8,
+    right: 8,
+    backgroundColor: 'rgba(0, 0, 0, 0.6)',
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  qaInputContainer: {
+    width: '100%',
+    marginBottom: SPACING.md,
+  },
+  qaTextInput: {
+    backgroundColor: COLORS.surfaceLight,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    borderRadius: 8,
+    padding: SPACING.sm,
+    color: COLORS.textPrimary,
+    fontSize: 13,
+    minHeight: 60,
+    textAlignVertical: 'top',
+    marginBottom: SPACING.sm,
+  },
+  qaButtonRow: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+  },
+  qaSubmitBtn: {
+    backgroundColor: COLORS.primary,
+    flexDirection: 'row',
+    paddingHorizontal: SPACING.md,
+    height: 36,
+    borderRadius: 6,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  qaSubmitBtnDisabled: {
+    backgroundColor: COLORS.surfaceLight,
+    opacity: 0.5,
+  },
+  qaSubmitBtnText: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: 'bold',
+  },
+  qaAnswerCard: {
+    backgroundColor: COLORS.successGlow,
+    borderWidth: 1,
+    borderColor: COLORS.success,
+    borderRadius: 8,
+    padding: SPACING.md,
+    marginTop: SPACING.xs,
+  },
+  qaAnswerHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: SPACING.xs,
+    gap: 6,
+  },
+  qaAnswerHeaderText: {
+    fontSize: 12,
+    fontWeight: 'bold',
+    color: COLORS.success,
+  },
+  qaCaptionText: {
+    fontSize: 11,
+    fontStyle: 'italic',
+    color: COLORS.textTertiary,
+    marginBottom: SPACING.xs,
+  },
+  qaAnswerText: {
+    fontSize: 13,
+    color: COLORS.textPrimary,
+    lineHeight: 18,
   },
 });

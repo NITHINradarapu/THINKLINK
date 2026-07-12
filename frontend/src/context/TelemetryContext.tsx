@@ -104,14 +104,19 @@ interface TelemetryContextProps {
   submitReport: (params: { device_id: string; worker_id: string; remarks?: string; image: any; audio?: any }) => Promise<any>;
   getDeviceDetails: (id: string) => Promise<any>;
   getDeviceHistoryList: (id: string) => Promise<any>;
+  askAI: (image: any, question: string) => Promise<any>;
 }
 
 const TelemetryContext = createContext<TelemetryContextProps | undefined>(undefined);
 
-// Default Socket.IO URL (mock server)
-const DEFAULT_SOCKET_IP = Platform.OS === 'android' ? 'http://10.48.65.93:3000' : 'http://localhost:3000';
-// Default REST API URL (FastAPI backend)
-const DEFAULT_API_URL = Platform.OS === 'android' ? 'http://10.48.65.93:8000' : 'http://localhost:8000';
+// Default REST API / WebSocket URL (FastAPI backend)
+// Physical Android device over WiFi → use the PC's LAN IP (same as the Metro server's IP) on port 8000
+// Android EMULATOR → 10.0.2.2 routes to host machine localhost
+// iOS / Web → localhost
+const DEFAULT_API_URL =
+  Platform.OS === 'android'
+    ? 'http://10.91.48.73:8000'  // PC LAN IP — update this if your machine's IP changes
+    : 'http://localhost:8000';
 
 // Helper to pre-populate mock historical telemetry data
 const generateInitialHistory = (): HistoricalReading[] => {
@@ -135,13 +140,29 @@ const INCIDENTS_POLL_INTERVAL = 5_000;   // 5s
 const NOTIFICATION_POLL_INTERVAL = 8_000; // 8s
 
 const getWebSocketUrl = (httpUrl: string): string => {
-  let wsUrl = httpUrl.replace(/^http:/, 'ws:').replace(/^https:/, 'wss:');
+  // Guard: ensure we are always pointing at the FastAPI backend (port 8000),
+  // never accidentally at the Expo Metro bundler (port 8081).
+  let safeUrl = httpUrl;
+  try {
+    const parsed = new URL(httpUrl);
+    if (parsed.port === '8081') {
+      // Expo Metro URL was passed — redirect to backend port
+      parsed.port = '8000';
+      safeUrl = parsed.toString().replace(/\/$/, '');
+      console.warn(
+        `[WebSocket] Detected Metro port 8081 in URL — correcting to backend port 8000: ${safeUrl}`
+      );
+    }
+  } catch (_) {
+    // URL parsing failed; proceed with original
+  }
+  const wsUrl = safeUrl.replace(/^http:/, 'ws:').replace(/^https:/, 'wss:');
   return `${wsUrl}/ws`;
 };
 
 export function TelemetryProvider({ children }: { children: React.ReactNode }) {
   // ── Connection URLs ─────────────────────────────────────
-  const [serverIp, setServerIp] = useState<string>(DEFAULT_SOCKET_IP);
+  const [serverIp, setServerIp] = useState<string>(DEFAULT_API_URL);
   const [apiBaseUrl, setApiBaseUrlState] = useState<string>(DEFAULT_API_URL);
 
   // ── Connection states ───────────────────────────────────
@@ -345,10 +366,14 @@ export function TelemetryProvider({ children }: { children: React.ReactNode }) {
         });
       }
 
-      setBackendConnected(true);
+      if (summary.status === 'fulfilled') {
+        setBackendConnected(true);
+      } else {
+        setBackendConnected(false);
+      }
     } catch (err) {
       console.log('[API] Dashboard refresh failed:', err);
-      // Don't set backendConnected false on polling failure — it might be transient
+      setBackendConnected(false);
     }
   }, []);
 
@@ -412,19 +437,54 @@ export function TelemetryProvider({ children }: { children: React.ReactNode }) {
     refreshDashboard();
     refreshIncidents();
     refreshNotifications();
+
+    // Periodic polling while connected
+    const dashboardTimer = setInterval(refreshDashboard, DASHBOARD_POLL_INTERVAL);
+    const incidentTimer = setInterval(refreshIncidents, INCIDENTS_POLL_INTERVAL);
+    const notifTimer = setInterval(refreshNotifications, NOTIFICATION_POLL_INTERVAL);
+
+    return () => {
+      clearInterval(dashboardTimer);
+      clearInterval(incidentTimer);
+      clearInterval(notifTimer);
+    };
   }, [backendConnected, refreshDashboard, refreshIncidents, refreshNotifications]);
+
+  // Reconnect checker: checks backend health periodically when offline
+  useEffect(() => {
+    if (backendConnected) return;
+
+    // Run check immediately on disconnect/startup
+    checkBackendHealth();
+
+    const timer = setInterval(() => {
+      checkBackendHealth();
+    }, 5000);
+
+    return () => {
+      clearInterval(timer);
+    };
+  }, [backendConnected, checkBackendHealth]);
+
+  // Reset connection states when backend is offline
+  useEffect(() => {
+    if (!backendConnected) {
+      setSocketConnected(false);
+      setConnections({
+        pc: false,
+        arduino: false,
+        glasses: false,
+      });
+      setAiStatus({
+        status: 'monitoring',
+        latestEvent: 'Backend offline. Reconnecting...',
+      });
+    }
+  }, [backendConnected]);
 
   // ────────────────────────────────────────────────────────
   // 4. Action Handlers
   // ────────────────────────────────────────────────────────
-
-  const updateServerIp = useCallback((ip: string) => {
-    let cleanIp = ip.trim();
-    if (!cleanIp.startsWith('http://') && !cleanIp.startsWith('https://')) {
-      cleanIp = `http://${cleanIp}`;
-    }
-    setServerIp(cleanIp);
-  }, []);
 
   const updateApiBaseUrlHandler = useCallback((url: string) => {
     let cleanUrl = url.trim();
@@ -435,6 +495,11 @@ export function TelemetryProvider({ children }: { children: React.ReactNode }) {
     setApiBaseUrlState(cleanUrl);
     setApiBaseUrl(cleanUrl);
   }, []);
+
+  const updateServerIp = useCallback((ip: string) => {
+    // updateServerIp now just calls updateApiBaseUrl — Socket.IO server is removed
+    updateApiBaseUrlHandler(ip);
+  }, [updateApiBaseUrlHandler]);
 
   const triggerActuator = useCallback((key: keyof ActuatorState, value: boolean) => {
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
@@ -529,6 +594,19 @@ export function TelemetryProvider({ children }: { children: React.ReactNode }) {
     return await api.getDeviceHistory(id);
   }, []);
 
+  // Visual Q&A
+  const askAI = useCallback(async (image: any, question: string) => {
+    try {
+      setAiStatus({ status: 'analyzing', latestEvent: 'Running Visual Q&A on Snapdragon NPU...' });
+      const result = await api.askAI(image, question);
+      setAiStatus({ status: 'resolved', latestEvent: 'Visual Q&A complete.' });
+      return result;
+    } catch (err) {
+      setAiStatus({ status: 'monitoring', latestEvent: 'Visual Q&A failed.' });
+      throw err;
+    }
+  }, []);
+
   // ────────────────────────────────────────────────────────
   // 5. Provide Context
   // ────────────────────────────────────────────────────────
@@ -565,6 +643,7 @@ export function TelemetryProvider({ children }: { children: React.ReactNode }) {
       submitReport,
       getDeviceDetails,
       getDeviceHistoryList,
+      askAI,
     }}>
       {children}
     </TelemetryContext.Provider>

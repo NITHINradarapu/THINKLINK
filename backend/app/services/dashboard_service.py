@@ -180,13 +180,24 @@ class DashboardService:
         db: Session,
     ):
 
+        db_devices = db.query(Device).all()
+
         devices = []
-
-        runtime = state_manager.get_all()
-
-        for state in runtime.values():
-
-            devices.append(state)
+        for d in db_devices:
+            devices.append({
+                "device_id": d.device_id,
+                "device_type": d.device_type,
+                "status": "online" if d.is_online else "offline",
+                "last_seen": d.last_seen.isoformat() if d.last_seen else None,
+                "battery_level": d.battery_level,
+                "latest_telemetry": {
+                    "temperature": d.temperature,
+                    "humidity": d.humidity,
+                    "gas_level": d.gas_level,
+                    "smoke_detected": d.smoke_detected,
+                    "battery_level": d.battery_level,
+                },
+            })
 
         return devices
 

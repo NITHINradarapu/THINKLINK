@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ThinkLink AI - Factory Digital Twin</title>
+    <style>
+        :root {
+            --bg-color: #0f172a;
+            --panel-bg: #1e293b;
+            --text-main: #f8fafc;
+            --text-muted: #94a3b8;
+            --accent-blue: #38bdf8;
+            --status-green: #22c55e;
+            --status-red: #ef4444;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+        
+        body { background-color: var(--bg-color); color: var(--text-main); padding: 2rem; }
+
+        header { border-bottom: 2px solid var(--panel-bg); padding-bottom: 1rem; margin-bottom: 2rem; display: flex; justify-content: space-between; align-items: center; }
+        header h1 { font-size: 1.8rem; color: var(--accent-blue); letter-spacing: 2px; text-transform: uppercase; }
+        
+        .status-badge { padding: 0.5rem 1.5rem; border-radius: 50px; font-weight: bold; font-size: 1.2rem; background-color: var(--status-green); color: #000; transition: 0.3s; }
+        .status-badge.alert { background-color: var(--status-red); color: white; animation: pulse 1s infinite; }
+
+        @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.6; } 100% { opacity: 1; } }
+
+        .dashboard-grid { display: grid; grid-template-columns: 1fr 2fr 1fr; gap: 2rem; }
+
+        .panel { background-color: var(--panel-bg); border-radius: 12px; padding: 1.5rem; border: 1px solid #334155; }
+        .panel h3 { color: var(--text-muted); font-size: 0.9rem; text-transform: uppercase; margin-bottom: 1rem; border-bottom: 1px solid #334155; padding-bottom: 0.5rem; }
+
+        .sensor-card { display: flex; justify-content: space-between; align-items: center; background: #0f172a; padding: 1rem; border-radius: 8px; margin-bottom: 1rem; border-left: 4px solid var(--accent-blue); }
+        .sensor-value { font-size: 1.5rem; font-weight: bold; font-family: monospace; }
+        .sensor-value.danger { color: var(--status-red); }
+
+        .machine-visual { display: flex; justify-content: center; align-items: center; height: 300px; }
+        .chamber { width: 200px; height: 200px; border-radius: 50%; border: 8px solid var(--status-green); display: flex; justify-content: center; align-items: center; background: radial-gradient(circle, rgba(34,197,94,0.1) 0%, rgba(15,23,42,1) 100%); transition: 0.3s; }
+        .chamber.alert { border-color: var(--status-red); background: radial-gradient(circle, rgba(239,68,68,0.2) 0%, rgba(15,23,42,1) 100%); }
+        .chamber-core { font-size: 1.2rem; font-weight: bold; letter-spacing: 1px; }
+
+        .ai-diagnostics { font-family: monospace; background: #000; color: var(--status-green); padding: 1rem; border-radius: 8px; min-height: 150px; font-size: 1.1rem; line-height: 1.5; border: 1px solid #334155; }
+        .ai-diagnostics.alert-text { color: var(--status-red); }
+
+    </style>
+</head>
+<body>
+
+    <header>
+        <h1>ThinkLink AI // Edge HMI</h1>
+        <div id="systemStatus" class="status-badge">SYSTEM NOMINAL</div>
+    </header>
+
+    <div class="dashboard-grid">
+        
+        <div class="panel">
+            <h3>Analog Telemetry</h3>
+            
+            <div class="sensor-card">
+                <div>Thermal Core (A0)</div>
+                <div id="tempVal" class="sensor-value">--</div>
+            </div>
+
+            <div class="sensor-card">
+                <div>Acoustic Vib (A1)</div>
+                <div id="soundVal" class="sensor-value">--</div>
+            </div>
+        </div>
+
+        <div class="panel">
+            <h3>Lithography Chamber 01</h3>
+            <div class="machine-visual">
+                <div id="machineChamber" class="chamber">
+                    <div class="chamber-core">ACTIVE</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="panel">
+            <h3>Safety Interlocks</h3>
+            
+            <div class="sensor-card">
+                <div>Flame Sensor (D2)</div>
+                <div id="flameVal" class="sensor-value">CLEAR</div>
+            </div>
+
+            <div class="sensor-card">
+                <div>IR Curtain (D3)</div>
+                <div id="avoidVal" class="sensor-value">INTACT</div>
+            </div>
+        </div>
+
+    </div>
+
+    <div class="panel" style="margin-top: 2rem;">
+        <h3>Snapdragon AI Swarm Output</h3>
+        <div id="aiLog" class="ai-diagnostics">
+            [ThinkLink System Ready] Awaiting hardware telemetry...
+        </div>
+    </div>
+
+    <script>
+        // DOM Elements
+        const elStatus = document.getElementById('systemStatus');
+        const elChamber = document.getElementById('machineChamber');
+        const elTemp = document.getElementById('tempVal');
+        const elSound = document.getElementById('soundVal');
+        const elFlame = document.getElementById('flameVal');
+        const elAvoid = document.getElementById('avoidVal');
+        const elLog = document.getElementById('aiLog');
+
+        // Thresholds (Matching the AI logic)
+        const THRESH_TEMP = 400; // Adjust based on your room temp analog reading
+        const THRESH_SOUND = 600; // Adjust based on background noise
+
+        // Connect to FastAPI WebSocket
+        // IMPORTANT: Change this URL to match your FastAPI WebSocket route
+        const ws = new WebSocket("ws://localhost:8000/ws");
+
+        ws.onopen = function() {
+            elLog.innerHTML = "[Network] WebSocket Connected.<br>[ThinkLink AI] Edge node initialized.";
+        };
+
+      ws.onmessage = function (event) {
+            try {
+                // Parse the incoming JSON from FastAPI
+                const data = JSON.parse(event.data);
+
+                // CRITICAL FIX: Only update the UI if the JSON actually contains Arduino data!
+                if (data.temperature !== undefined) {
+
+                    // Update UI Values
+                    elTemp.innerText = data.temperature;
+                    elSound.innerText = data.sound;
+
+                    elFlame.innerText = data.flame_detected === 1 ? "DETECTED!" : "CLEAR";
+                    elAvoid.innerText = data.safety_breach === 0 ? "BREACHED!" : "INTACT";
+
+                    // Check for Alert Conditions
+                    let isAlert = false;
+                    let alertMessage = "";
+
+                    if (data.temperature > THRESH_TEMP) { isAlert = true; alertMessage = "CRITICAL: Thermal runaway detected. Cooling failure in main chamber."; }
+                    else if (data.sound > THRESH_SOUND) { isAlert = true; alertMessage = "WARNING: Acoustic anomaly. Potential spindle bearing failure."; }
+                    else if (data.flame_detected === 1) { isAlert = true; alertMessage = "CRITICAL: Ignition detected in processing envelope. Fire suppression armed."; }
+                    else if (data.safety_breach === 0) { isAlert = true; alertMessage = "CRITICAL: Human intrusion detected through light curtain. Emergency Stop engaged."; }
+
+                    // Update UI State
+                    if (isAlert) {
+                        elStatus.innerText = "E-STOP TRIGGERED";
+                        elStatus.classList.add("alert");
+                        elChamber.classList.add("alert");
+                        document.querySelector('.chamber-core').innerText = "HALTED";
+
+                        elLog.classList.add("alert-text");
+                        elLog.innerHTML = `[AI DIAGNOSTIC]: ${alertMessage}<br>> RELAY: DISENGAGED<br>> AUDIO ALARM: ACTIVE`;
+                    } else {
+                        elStatus.innerText = "SYSTEM NOMINAL";
+                        elStatus.classList.remove("alert");
+                        elChamber.classList.remove("alert");
+                        document.querySelector('.chamber-core').innerText = "ACTIVE";
+
+                        elLog.classList.remove("alert-text");
+                        elLog.innerHTML = `[AI DIAGNOSTIC]: Machine performing within expected parameters.`;
+                    }
+                } else {
+                    console.log("Received system message:", data);
+                }
+
+            } catch (e) {
+                console.error("Error parsing JSON data: ", e);
+            }
+        };
+
+        ws.onclose = function() {
+            elLog.innerHTML += "<br>[Network] WebSocket connection lost.";
+        };
+    </script>
+</body>
+</html>

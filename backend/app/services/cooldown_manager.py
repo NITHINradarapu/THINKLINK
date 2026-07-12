@@ -6,6 +6,7 @@ within a configurable cooldown period.
 """
 
 from datetime import datetime, timedelta
+from app.config.settings import settings
 
 
 class CooldownManager:
@@ -71,4 +72,4 @@ class CooldownManager:
 
 
 # Singleton
-cooldown_manager = CooldownManager()
+cooldown_manager = CooldownManager(cooldown_seconds=settings.ai_cooldown_seconds)

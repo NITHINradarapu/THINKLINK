@@ -28,8 +28,10 @@ Action Executor
 Notification Service
 """
 
+import time
 from app.services.action_executor import ActionExecutor
 from app.services.cooldown_manager import cooldown_manager
+from app.services.device_history_service import device_history_service
 from app.services.device_service import DeviceService
 from app.services.event_detector import EventDetector
 from app.services.incident_service import IncidentService
@@ -57,6 +59,8 @@ class TelemetryPipelineService:
 
         self.action_executor = ActionExecutor()
 
+        self._last_process_time: dict[str, float] = {}
+
     # ======================================================
     # Main Pipeline
     # ======================================================
@@ -69,6 +73,45 @@ class TelemetryPipelineService:
         """
         Execute the complete telemetry workflow.
         """
+        current_time = time.time()
+        last_time = self._last_process_time.get(telemetry.device_id, 0.0)
+
+        # 2.0-second rate-limiting cooldown per device to prevent DB lock contention & telemetry overload
+        if current_time - last_time < 2.0:
+            try:
+                checker_res = ThresholdChecker.check(telemetry)
+                try:
+                    from app.main import control_system_state
+                    if control_system_state:
+                        control_system_state(checker_res["triggered"])
+                except Exception:
+                    pass
+                telemetry_dict = {
+                    "device_id": telemetry.device_id,
+                    "temperature": telemetry.temperature,
+                    "humidity": telemetry.humidity,
+                    "gas": telemetry.gas_level,
+                    "gas_level": telemetry.gas_level,
+                    "smoke_detected": telemetry.smoke_detected,
+                    "battery_level": telemetry.battery_level,
+                    "vibration": getattr(telemetry, "vibration", 0.05) or 0.05,
+                    "buzzer_active": checker_res["triggered"],
+                    "led_red_active": checker_res["triggered"]
+                }
+                await websocket_manager.broadcast_telemetry(telemetry_dict)
+            except Exception:
+                pass
+
+            return {
+                "success": True,
+                "ai_triggered": False,
+                "risk_level": "LOW",
+                "confidence": 1.0,
+                "message": "Telemetry rate-limited/cooldown active. Broadcasted to UI.",
+                "reasons": []
+            }
+
+        self._last_process_time[telemetry.device_id] = current_time
 
         request_id = f"TEL-{telemetry.device_id}"
 
@@ -87,6 +130,12 @@ class TelemetryPipelineService:
                 db=db,
                 telemetry=telemetry,
             )
+
+            # Save every reading to rolling history (vibration included)
+            try:
+                device_history_service.save(db=db, telemetry=telemetry)
+            except Exception as hist_err:
+                log_error(request_id, f"History save failed: {hist_err}")
 
             metrics_service.telemetry()
 
@@ -131,6 +180,14 @@ class TelemetryPipelineService:
                 telemetry
             )
 
+            # Sync physical buzzer & LED with threshold result
+            try:
+                from app.main import control_system_state
+                if control_system_state:
+                    control_system_state(threshold_result["triggered"])
+            except Exception:
+                pass
+
             log_request(
                 request_id,
                 "Threshold evaluation completed.",
@@ -168,6 +225,39 @@ class TelemetryPipelineService:
                     request_id,
                     "AI trigger not required.",
                 )
+
+                # Auto-resolve active incidents for this device when sensors return to nominal
+                try:
+                    active_incidents = self.incident_service.get_active(db)
+                    device_active_incidents = [inc for inc in active_incidents if inc.device_id == telemetry.device_id]
+                    if device_active_incidents:
+                        for incident in device_active_incidents:
+                            self.incident_service.resolve(db, incident.incident_id)
+                        
+                        # Turn off physical buzzer & LED red
+                        try:
+                            from app.main import control_system_state
+                            if control_system_state:
+                                control_system_state(False)
+                        except Exception:
+                            pass
+                        
+                        # Reset UI actuator switches to nominal states
+                        websocket_manager.actuators = {
+                            "buzzer": False,
+                            "led": True,
+                            "relay": False,
+                        }
+                        await websocket_manager.broadcast({
+                            "type": "actuator_states",
+                            "data": websocket_manager.actuators
+                        })
+                        await websocket_manager.broadcast_ai_status(
+                            "monitoring",
+                            "All systems nominal. Monitoring environment..."
+                        )
+                except Exception as auto_resolve_err:
+                    log_error(request_id, f"Auto-resolve failed: {auto_resolve_err}")
 
                 return {
 
@@ -214,14 +304,12 @@ class TelemetryPipelineService:
 
                 }
 
-            # ======================================================
-            # STEP 7 - Supervisor AI
-            # ======================================================
-
-            log_request(
-                request_id,
-                "Sending request to Supervisor AI.",
-            )
+            # Release database session before slow network AI request to prevent SQLite locking
+            try:
+                db.commit()
+                db.close()
+            except Exception:
+                pass
 
             from fastapi.concurrency import run_in_threadpool
             ai_result = await run_in_threadpool(
@@ -241,109 +329,114 @@ class TelemetryPipelineService:
             # STEP 8 - Create Incident
             # ======================================================
 
-            incident = self.incident_service.create(
-
-                db=db,
-
-                telemetry=telemetry,
-
-                ai_result=ai_result,
-
-            )
-
-            # Broadcast new incident and status to WebSockets
+            from app.database.session import SessionLocal
+            db_new = SessionLocal()
             try:
-                incident_dict = {
+                incident = self.incident_service.create(
+
+                    db=db_new,
+
+                    telemetry=telemetry,
+
+                    ai_result=ai_result,
+
+                )
+
+                # Broadcast new incident and status to WebSockets
+                try:
+                    incident_dict = {
+                        "incident_id": incident.incident_id,
+                        "device_id": incident.device_id,
+                        "device_type": incident.device_type.value if hasattr(incident.device_type, "value") else str(incident.device_type),
+                        "risk_level": incident.risk_level.value if hasattr(incident.risk_level, "value") else str(incident.risk_level),
+                        "summary": incident.summary,
+                        "ai_reasoning": incident.ai_reasoning,
+                        "confidence_score": float(incident.confidence_score),
+                        "recommended_actions": incident.recommended_actions,
+                        "sensor_snapshot": incident.sensor_snapshot,
+                        "status": incident.status.value if hasattr(incident.status, "value") else str(incident.status),
+                        "created_at": incident.created_at.isoformat() if hasattr(incident.created_at, "isoformat") else str(incident.created_at),
+                    }
+                    await websocket_manager.broadcast_ai_status("analyzing", f"Active incident: {incident.summary}")
+                    await websocket_manager.broadcast_incident(incident_dict)
+                except Exception as ws_err:
+                    log_error(request_id, f"WebSocket incident broadcast failed: {ws_err}")
+
+                metrics_service.incident()
+
+                log_request(
+                    request_id,
+                    f"Incident created: {incident.incident_id}",
+                )
+
+                # ======================================================
+                # STEP 9 - Execute Actions
+                # ======================================================
+
+                self.action_executor.execute(
+
+                    db=db_new,
+
+                    incident=incident,
+
+                )
+
+                log_request(
+                    request_id,
+                    "Actions executed.",
+                )
+
+                # ======================================================
+                # STEP 10 - Notifications
+                # ======================================================
+
+                notification_service.send(
+
+                    db=db_new,
+
+                    incident=incident,
+
+                )
+
+                metrics_service.notification()
+
+                log_request(
+                    request_id,
+                    "Notification sent.",
+                )
+
+                # ======================================================
+                # STEP 11 - Final Response
+                # ======================================================
+
+                log_request(
+                    request_id,
+                    "Telemetry pipeline completed successfully.",
+                )
+
+                return {
+
+                    "success": True,
+
+                    "ai_triggered": True,
+
                     "incident_id": incident.incident_id,
-                    "device_id": incident.device_id,
-                    "device_type": incident.device_type.value if hasattr(incident.device_type, "value") else str(incident.device_type),
-                    "risk_level": incident.risk_level.value if hasattr(incident.risk_level, "value") else str(incident.risk_level),
-                    "summary": incident.summary,
-                    "ai_reasoning": incident.ai_reasoning,
-                    "confidence_score": float(incident.confidence_score),
-                    "recommended_actions": incident.recommended_actions,
-                    "sensor_snapshot": incident.sensor_snapshot,
-                    "status": incident.status.value if hasattr(incident.status, "value") else str(incident.status),
-                    "created_at": incident.created_at.isoformat() if hasattr(incident.created_at, "isoformat") else str(incident.created_at),
+
+                    "risk_level": ai_result["risk_level"],
+
+                    "confidence": ai_result["confidence_score"],
+
+                    "summary": ai_result["summary"],
+
+                    "reasoning": ai_result["reasoning"],
+
+                    "recommended_actions": ai_result[
+                        "recommended_actions"
+                    ],
+
                 }
-                await websocket_manager.broadcast_ai_status("analyzing", f"Active incident: {incident.summary}")
-                await websocket_manager.broadcast_incident(incident_dict)
-            except Exception as ws_err:
-                log_error(request_id, f"WebSocket incident broadcast failed: {ws_err}")
-
-            metrics_service.incident()
-
-            log_request(
-                request_id,
-                f"Incident created: {incident.incident_id}",
-            )
-
-            # ======================================================
-            # STEP 9 - Execute Actions
-            # ======================================================
-
-            self.action_executor.execute(
-
-                db=db,
-
-                incident=incident,
-
-            )
-
-            log_request(
-                request_id,
-                "Actions executed.",
-            )
-
-            # ======================================================
-            # STEP 10 - Notifications
-            # ======================================================
-
-            notification_service.send(
-
-                db=db,
-
-                incident=incident,
-
-            )
-
-            metrics_service.notification()
-
-            log_request(
-                request_id,
-                "Notification sent.",
-            )
-
-            # ======================================================
-            # STEP 11 - Final Response
-            # ======================================================
-
-            log_request(
-                request_id,
-                "Telemetry pipeline completed successfully.",
-            )
-
-            return {
-
-                "success": True,
-
-                "ai_triggered": True,
-
-                "incident_id": incident.incident_id,
-
-                "risk_level": ai_result["risk_level"],
-
-                "confidence": ai_result["confidence_score"],
-
-                "summary": ai_result["summary"],
-
-                "reasoning": ai_result["reasoning"],
-
-                "recommended_actions": ai_result[
-                    "recommended_actions"
-                ],
-
-            }
+            finally:
+                db_new.close()
 
         except Exception as e:
 

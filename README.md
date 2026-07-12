@@ -1,187 +1,274 @@
 # ThinkLink — Snapdragon Edge Industrial Safety Monitor
 
-> **Hackathon Project** — Built for the Qualcomm Snapdragon AI PC Hackathon
-
-ThinkLink is an advanced, offline-first real-time industrial safety monitoring system that bridges a **Snapdragon AI PC** (running a local multi-agent swarm), **IoT sensors (or simulated sensor nodes)**, and a **React Native mobile app** via a FastAPI WebSocket backend.
+> **Hackathon Project** — Built for the Qualcomm Snapdragon AI PC Hackathon. An offline-first, real-time safety sentinel leveraging edge intelligence, physical hardware integration, and multi-modal AI diagnostics.
 
 ---
 
-## 🌟 Key Features
+## 👥 Role-Based Engineering Ownership
 
-* **Multi-Agent Swarm**: Features a 3-stage collaborative agent pipeline running locally on Phi-3, Faster-Whisper, and BLIP:
-  * **Input Agent**: Multimodal parser supporting **Telemetry** (IoT JSON), **Audio** (voice transcripts via Whisper), **Images** (machine photos via BLIP), or **Combined Sensor Fusion**.
-  * **Supervisor Agent**: Domain router classifying safety anomalies into Lithography, Deposition, Quality, or Packaging departments.
-  * **Domain Experts**: Contextual RAG diagnostic agents querying local ChromaDB vector databases for manuals and safety specifications, returning structured incident JSON.
-* **Offline-First & Local AI**: Designed for secure factory networks with local execution of Phi-3-mini on Snapdragon CPU using ONNX Runtime GenAI, local Faster-Whisper, and local BLIP, with automatic fallback to Ollama services.
-* **Real-time Telemetry Pipeline**: Continuous ingestion of machine sensor data (temperature, gas levels, vibration, humidity), automatic threshold alerts, and real-time push to the mobile dashboard via WebSockets.
-* **Network Diagnoser**: Auto-detects local network configurations to easily pair mobile devices to the host PC backend.
-* **Simulators**: Interactive test scripts to stream nominal telemetry or inject hazard anomalies (e.g. gas leak, overheating) to validate the pipeline.
+To succeed in a rapid development cycle, the engineering duties were split into four core disciplines:
 
----
+### 1. Hardware Engineer (IoT & Fail-Safe Actuators)
+* **Components Owned**: Arduino UNO edge firmware, physical piezoceramic buzzers, 5V single-channel isolation relays, status LED indicators (Red warning, Green nominal).
+* **Core Tasks**:
+  * Programmed the microcontroller serial transmitter to stream JSON telemetry packets (`{"temperature", "sound", "flame_detected", "safety_breach"}`) over USB Serial (9600 baud, COM3).
+  * Wired the safety barrier and emergency cutoff inputs using a **Normally Closed (NC)** loop (outputting `1` when safe, `0` when tripped) for robust fail-safe operations.
+  * Configured serial command listeners to parse incoming single-character bytes (`"1"`, `"0"`, `"R"`, `"G"`, `"2"`, `"3"`) to toggle outputs in real-time.
 
-## 📁 Repository Structure
+### 2. Backend Engineer (Edge Server & Data Pipelines)
+* **Components Owned**: FastAPI Python edge server, SQLite database system (SQLAlchemy ORM models), WebSocket manager connection pool, telemetry pipeline coordinator.
+* **Core Tasks**:
+  * Built the **Telemetry Ingest Pipeline** executing device status audits, rolling history writes, threshold inspections, and client WebSocket notifications.
+  * Designed the **2.0-second rate-limiting cooldown** at the serial stream parser and REST endpoints to prevent SQLite database writes from locking under high frequency.
+  * Relocated the database file outside the Uvicorn reload path to prevent infinite server restarts.
+  * Created the `POST /database/clear` REST route to wipe logs safely.
 
-```
-THINKLINK/
-├── backend/                  # FastAPI Python backend & AI engines
-│   ├── app/                  # Main application package
-│   │   ├── agents/           # Multi-Agent Swarm (master orchestrator)
-│   │   ├── api/              # FastAPI Router endpoints
-│   │   ├── services/         # Telemetry pipeline & orchestrator services
-│   │   └── database/         # SQLite DB schemas and initializations
-│   ├── get_ip.py             # Network helper to configure mobile API base
-│   ├── simulate_sensors.py   # Continuous telemetry simulator (with periodic anomalies)
-│   └── thinklink_knowledge/  # ChromaDB persistent vector database directory
-├── frontend/                 # React Native (Expo) mobile app
-│   ├── src/screens/          # App views (Dashboard, Settings, Incidents)
-│   └── src/context/          # Telemetry Context for WebSocket status updates
-└── send_test_data.py         # Static simulation script for API flow checks
-```
+### 3. AI Engineer (Edge LLMs & Vector Databases)
+* **Components Owned**: `MasterOrchestrator` routing agent, Faster-Whisper audio transcription model, BLIP captioning model, ChromaDB knowledge bases, GenieX Snapdragon NPU API connection.
+* **Core Tasks**:
+  * Configured local **Faster-Whisper** with factory-specific vocabulary (e.g. *PACVD, RIE*) and local **BLIP** to caption equipment cracks and defects.
+  * Populated a custom **ChromaDB vector store** with semiconductor safety instructions for Lithography, Deposition, Quality, and Packaging domains.
+  * Built domain classification keyword matrices and few-shot classification prompts.
+  * Configured a **2.0-second request timeout** and mock warning consensus fallback to keep the backend fluid if the local NPU server was busy or offline.
 
----
-
-## 🚀 Quick Start
-
-### 1. Backend Setup
-
-Ensure you have Python 3.10+ installed.
-
-```bash
-cd backend
-python -m venv venv
-venv\Scripts\activate       # Windows PowerShell
-pip install -r requirements.txt
-cp .env.example .env        # Configure thresholds and AI URL
-```
-
-#### Running the Backend
-Start the FastAPI server:
-```bash
-python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
-```
-
----
-
-### 2. Network Configuration & Device Pairing
-
-Since the React Native app runs on a mobile device, it needs to connect to the PC running the backend. 
-Run the ThinkLink Network Diagnoser script to find the correct IP address:
-
-```bash
-cd backend
-python get_ip.py
-```
-
-This will print the host PC's recommended local Wi-Fi IP address. Copy the recommended URL (e.g., `http://192.168.1.100:8000`) and paste it into the **Settings Screen** of your mobile application to pair them immediately.
-
----
-
-### 3. Frontend Setup
-
-Ensure you have Node.js installed.
-
-```bash
-cd frontend
-npm install
-npm run start               # Launch Expo Dev Server
-```
-
-Scan the printed QR code with **Expo Go** on your iOS/Android phone, or press `w` to open the app in a web browser.
-
----
-
-### 4. Telemetry Simulation
-
-To feed live sensor data and test the AI pipeline without physical hardware:
-
-* **Live Streaming Simulator**: Streams telemetry packets every 3 seconds and triggers a critical gas/smoke anomaly every 10th packet to invoke the AI Swarm:
-  ```bash
-  cd backend
-  python simulate_sensors.py
-  ```
-
-* **Step-by-Step Scenario Script**: Sends static steps (Nominal -> Overheating -> Critical Gas -> Normal Reset) to verify threshold transitions:
-  ```bash
-  python send_test_data.py
-  ```
+### 4. Frontend Engineer (Operator Mobile App)
+* **Components Owned**: Expo React Native mobile client, WebSocket telemetry context listener, UI Dashboard screens.
+* **Core Tasks**:
+  * Programmed real-time circular and linear telemetry gauges displaying temperature, gas levels, and vibration.
+  * Integrated an animated line chart rendering the last 20 seconds of sensor trends.
+  * Created the Controls Screen remote actuators toggles, paired status check dots (PC, Arduino, Smart Glasses link status), and Settings pairing configuration fields.
+  * Implemented danger card UI database cleansers with double-confirmation popups and tactile haptics.
 
 ---
 
 ## 🏗️ System Architecture
 
+The ThinkLink system is built as a stack of three decoupled layers: the Physical IoT edge, the Snapdragon AI PC local backend, and the React Native operator interface.
+
 ```
-                                  ┌─────────────────────────────┐
-                                  │   Multi-Modal Worker Inputs │
-                                  │  (Telemetry, Voice, Photo)  │
-                                  └──────────────┬──────────────┘
-                                                 │
-                                                 ▼
-┌─────────────────────────────────────────────────────────────────────────────────────────┐
-│ Snapdragon AI PC (FastAPI Backend)                                                      │
-│                                                                                         │
-│   ┌─────────────────────────────────────────────────────────────────────────────────┐   │
-│   │ ThinkLink Multi-Agent Swarm (Phi-3 Engine / Ollama Fallback)                    │   │
-│   │                                                                                 │   │
-│   │  [Input Agent] ──► [Supervisor Agent] ──► [Domain Expert Agent] (RAG)           │   │
-│   │  (Translate)        (Score & Route)       ┌────────────────────────┐            │   │
-│   │                                           │  ChromaDB Vector DB    │            │   │
-│   │                                           │ (Litho, Depo, Quality, │            │   │
-│   │                                           │  Packaging manuals)    │            │   │
-│   │                                           └────────────────────────┘            │   │
-│   └───────────────────────────────────────┬─────────────────────────────────────────┘   │
-│                                           │ Produces Structured Diagnostic JSON         │
-│                                           ▼                                             │
-│   ┌─────────────────────────────────────────────────────────────────────────────────┐   │
-│   │ Telemetry Pipeline & WebSocket Manager                                          │   │
-│   └───────────────────────────────────────┬─────────────────────────────────────────┘   │
-└───────────────────────────────────────────┼─────────────────────────────────────────────┘
-                                            │ Real-time WebSocket Frame Push
-                                            ▼
-                                  ┌───────────────────┐
-                                  │ React Native App  │
-                                  │ (Dashboard/Alerts)│
-                                  └───────────────────┘
+       ┌────────────────────────────────────────────────────────┐
+       │             React Native (Expo Mobile App)             │  ◄─── USER INTERFACE
+       │    [Live Dashboard]  [Remotes]  [Settings / DB Wipe]   │
+       └───────────────────────────▲────────────────────────────┘
+                                   │  WebSocket Data Push
+                                   │  & JSON REST API
+       ┌───────────────────────────▼────────────────────────┐
+       │             Snapdragon AI PC (FastAPI)             │  ◄─── EDGE ORCHESTRATION
+       │   ┌────────────────────────────────────────────┐   │       (Local CPU & NPU)
+       │   │  Local Multimodal Swarm (GenieX Qwen3)     │   │
+       │   │  [Input Agent] -> [Supervisor] -> [RAG]    │   │
+       │   └─────────────────────▲──────────────────────┘   │
+       │                         │ Database Read/Write      │
+       │   ┌─────────────────────▼──────────────────────┐   │
+       │   │  ChromaDB Manuals  & SQLite Incident Log   │   │
+       │   └────────────────────────────────────────────┘   │
+       └───────────────────────────▲────────────────────────┘
+                                   │  USB Serial Communication
+                                   │  (Actuator Writes & Ingest)
+       ┌───────────────────────────▼────────────────────────┐
+       │                Physical Edge Node                  │  ◄─── IOT HARDWARE
+       │     [Arduino UNO]  [Buzzer]  [Relay]  [LEDs]       │       (Fail-Safe Loop)
+       └────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## 🤖 Swarm Agents
+## 🔄 System Workflow & Sensor Fusion
 
-1. **Input Translation Agent**: Standardizes raw telemetry, audio voice transcripts (via Faster-Whisper), or device photos (via BLIP) into a unified semantic factory alert string.
-2. **Supervisor Agent**: A high-speed router. Analyzes the alert using a keyword scoring matrix mapping to factory domains, falling back to a zero-shot LLM classification.
-3. **Domain Experts (RAG)**: Four specialized agents (`LITHOGRAPHY`, `DEPOSITION`, `QUALITY`, `PACKAGING`) that fetch matching operating procedures from ChromaDB, synthesize telemetry with context, and output structured diagnostic JSON.
+```mermaid
+sequenceDiagram
+    autonumber
+    participant HW as Arduino Node (COM3)
+    participant BE as FastAPI Edge Server
+    participant DB as SQLite / ChromaDB
+    participant AI as GenieX Swarm (Qualcomm NPU)
+    participant UI as React Native Mobile App
+
+    %% 1. Ingestion Loop
+    loop Every 50ms Telemetry Stream
+        HW->>BE: Raw JSON packet {"temp", "sound", "safety_breach"}
+    end
+
+    %% 2. Rate Limiting & Checking
+    Note over BE: Ingestion Cooldown: Check last process time
+    alt Elapsed Time < 2.0s (Rate-Limited)
+        BE->>UI: Fast broadcast raw values via WebSocket (smooth UI)
+    else Elapsed Time >= 2.0s (Full Pipeline Process)
+        BE->>DB: Save to DeviceHistory (thinklink.db in root)
+        BE->>BE: Run ThresholdChecker.check()
+        
+        alt Thresholds Safe (Nominal)
+            BE->>HW: Write b"0" (Buzzer OFF) + b"G" (Green LED ON)
+            BE->>UI: Broadcast nominal WebSocket state
+        else Anomaly Detected (Alert)
+            BE->>HW: Write b"1" (Buzzer ON) + b"R" (Red LED ON)
+            
+            %% 3. AI Swarm Invocation
+            Note over BE: Check AI Swarm Cooldown (settings.ai_cooldown_seconds)
+            alt AI Cooldown Safe
+                BE->>AI: Invoke MasterOrchestrator.process_factory_alert()
+                
+                alt AI Online
+                    AI->>DB: Query ChromaDB Vector database for manuals
+                    AI->>BE: Return structured diagnostics JSON
+                else AI Offline (GenieX Timeout > 2.0s)
+                    Note over BE: Fail fast in 2s & apply mock fallback
+                    BE->>BE: Generate Mock AI consensus alert
+                end
+                
+                BE->>DB: Create Incident entry (INC-XXXX)
+                BE->>DB: Trigger action logs (ActionLog)
+                BE->>UI: Broadcast new incident & Swarm status via WebSocket
+            else AI Cooldown Active
+                BE->>UI: Broadcast telemetry alert (AI diagnostics skipped)
+            end
+        end
+    end
+
+    %% 4. Manual Overrides
+    UI->>BE: WebSocket "control_actuator" event (e.g. Turn Buzzer OFF)
+    BE->>BE: Set buzzer_muted = True
+    BE->>HW: Write b"0" (Silence Buzzer immediately)
+    Note over BE: Auto-rearmer: Clear buzzer_muted once metrics return to safe baseline
+```
 
 ---
 
-## 🛠️ Tech Stack
+## 🛠️ Workflows Deep Dive
 
-| Layer | Technology | Description |
-|---|---|---|
-| **Mobile App** | React Native + Expo | Cross-platform dashboard & controls |
-| **Backend** | FastAPI (Python) | High-performance API and WebSocket server |
-| **Real-time** | WebSocket | Live telemetry & notification dispatch |
-| **Database** | SQLite + SQLAlchemy | Persistent incident log and system audits |
-| **LLM Engine** | Phi-3-mini-cpu (ONNX Runtime GenAI) | 3-stage local orchestrator and reasoner |
-| **Audio Model** | Faster-Whisper (`base.en`) | High-speed local voice memo transcription |
-| **Vision Model** | Salesforce BLIP Base | Under-1GB local image captioner for defect photos |
-| **Vector DB** | ChromaDB | Local knowledge storage for semiconductor procedures |
+### 1. Telemetry Ingestion Throttling (2.0s Cooldown)
+* **Ingest Control**: The background thread `read_serial_data_sync` parses incoming JSON telemetry lines from the serial port at a 50ms polling interval.
+* **Pipeline Throttling**: To avoid overloading the SQLite database and writing repetitive logs, a **2.0-second cooldown** per device is enforced.
+* **WebSocket Bypass**: When a packet is rate-limited, the server skips database writes and AI routing but still broadcasts the telemetry to all WebSockets. This keeps the mobile dashboard charts updating smoothly and live.
+
+### 2. Fail-Safe Normally Closed (NC) Safety Breach Logic
+* **Industrial Standard**: Safety barrier and emergency stop switch inputs on the Arduino are configured using a **Normally Closed (NC)** circuit design.
+* **Logic mapping**: 
+  * `safety_breach: 1` = Loop closed (Safe/Nominal operation).
+  * `safety_breach: 0` = Loop broken (Barrier tripped, emergency stop pressed, or wire disconnected).
+* **Alert Trigger**: In [main.py](file:///c:/THINKLINK/THINKLINK/backend/app/main.py#L187), the backend evaluates `data_dict.get("safety_breach", 1) == 0`. When it detects a breach (`0`), it sound-triggers the alarm immediately.
+
+### 3. Remote Actuator Overrides & Auto-Rearming
+* **Manual Mute**: If the buzzer is blaring due to an active breach, users can click the "Local Buzzer Alarm" switch in the app's Controls screen. The backend intercepts this event, sets `buzzer_muted = True`, and writes `b"0"` to the Arduino serial port to silence the physical alarm while keeping the warning LED red.
+* **Auto-Rearm**: Once the anomaly is resolved and sensor readings return to safe baseline thresholds, the system resets `buzzer_muted = False`. This ensures that subsequent emergencies will correctly sound the alarm again.
+* **Isolation Relay**: Provides a high-risk remote actuation switch on the mobile client. Activating the switch sends `b"2"` (Shutdown equipment) and turning it off sends `b"3"` (Restore power) over the serial bus.
+
+### 4. Fail-Fast 2s AI Server Fallback
+* **Low-Latency Checks**: Requests sent to the local Qualcomm NPU Qwen3-8B brain via GenieX are capped at a **2.0-second timeout** in [master_orchestrator.py](file:///c:/THINKLINK/THINKLINK/backend/app/agents/master_orchestrator.py#L102).
+* **Mock Consensus Fallback**: If the NPU server is loading models or offline, the Swarm diagnostic step returns a mock consensus alert string (`"CRITICAL ALERT: Smoke detected. Mock AI override active."`) and routes the incident to the `QUALITY` domain expert, ensuring server execution doesn't block.
+
+### 5. Double-Confirmation Database Wipe
+* **Safe Cleans**: Exposed via `POST /database/clear` in [database.py](file:///c:/THINKLINK/THINKLINK/backend/app/api/routes/database.py). It safely clears tables in order to respect database relationships.
+* **UI Confirmation**: Placed on the Settings Screen under a separate red card. It requires a double-step confirmation prompt and uses tactile haptic feedback to prevent accidental deletions.
 
 ---
 
-## ⚙️ Environment Variables
+## 📱 5. Mobile App Layout & Screen Flows
 
-Configure the backend behavior by editing `backend/.env`:
+The mobile client is built in React Native (Expo) and features four primary screens:
+
+### 5.1 Dashboard Screen
+* **Live Sensors Gauge**: Circular and linear gauges tracking temperature, humidity, gas concentration (PPM), and vibration index in real-time via the WebSocket connection.
+* **Rolling History Chart**: An animated line chart mapping the last 20 readings to visual curves, illustrating trend directions.
+* **Active Incident Warning Banner**: Appears dynamically at the top of the dashboard when a breach is active, displaying severities, departments, and quick-resolve buttons.
+
+### 5.2 Controls Screen (Manual Remotes)
+* **Actuators Switches**: Remote toggles for the Local Buzzer, Safety LED, and Emergency Isolation Relay.
+* **Device Pairing Monitor**: Lists connection status indicators for:
+  * **FastAPI Server (PC)**: Green if paired.
+  * **Arduino Ingest**: Green if serial handshake active.
+  * **Smart Safety Glasses**: Green if camera/glasses feed linked.
+* **Diagnostics trigger**: Features a `Run System Health Check` button to audit all SQLite log files directly from the edge.
+
+### 5.3 Incidents Log Screen
+* **Historical Audit log**: Displays a filterable list of all incidents logged.
+* **RAG Diagnostic Details**: Allows clicking an incident card to view details:
+  * Department routed to (Lithography, Deposition, Quality, Packaging).
+  * Exact reasoning text derived from vector procedures.
+  * Recommended checklist actions recommended by domain experts.
+
+### 5.4 Settings Screen
+* **IP Pairing Input**: Text fields to enter the host PC's Wi-Fi IP address (e.g. `192.168.1.100`) discovered using `get_ip.py`.
+* **Danger Zone (Wipe Database)**: Card containing a double-confirmation mechanism with alerts and haptic triggers to execute `POST /database/clear`.
+
+---
+
+## 📁 6. Repository Structure
+
+```
+THINKLINK/
+├── thinklink.db                # RELOCATED SQLite Database (Prevents Uvicorn reload loop)
+├── send_test_data.py           # Scenario test script (Nominal -> Spikes -> Safety breach)
+├── backend/                    # FastAPI python edge server
+│   ├── app/                    # Code root
+│   │   ├── agents/             # MasterOrchestrator, input parser, Supervisor AI
+│   │   ├── api/                # REST Routers & DB wipe endpoints
+│   │   ├── core/               # Configuration settings loaders
+│   │   ├── database/           # SQLite connection pools and models
+│   │   └── services/           # Telemetry pipelines, websocket managers, action executors
+│   └── simulate_sensors.py     # Real-time HTTP sensor simulator
+└── frontend/                   # Expo React Native mobile application
+    ├── src/                    # Code root
+    │   ├── context/            # TelemetryContext WebSocket client
+    │   ├── screens/            # DashboardScreen, ControlsScreen, SettingsScreen
+    │   └── services/           # Api client helper calls
+    └── package.json            # React Native app specifications
+```
+
+---
+
+## ⚙️ 7. Environment Configuration
+
+Configure safety thresholds and AI connection strings in `backend/.env`:
 
 ```env
-DATABASE_URL=sqlite:///./thinklink.db
-AI_SERVICE_URL=http://localhost:11434/api/generate  # Fallback Ollama service URL
-TEMP_THRESHOLD=80.0                                 # High temperature alarm limit (°C)
-GAS_THRESHOLD=300.0                                 # Hazardous gas level limit (PPM)
-VIBRATION_THRESHOLD=0.5                             # Mechanical vibration alarm limit (G-force)
+# Database
+DATABASE_URL=sqlite:///../thinklink.db
+database_url=sqlite:///../thinklink.db
+
+# AI Service Settings
+AI_SERVICE_URL=http://localhost:18181/v1/chat/completions
+ai_cooldown_seconds=60
+
+# Safety Thresholds
+TEMP_THRESHOLD=100.0             # High Temperature Alarm Limit (°C)
+GAS_THRESHOLD=500.0             # Hazardous Gas Limit (PPM)
+HUMIDITY_THRESHOLD=90.0         # Upper Humidity Limit (%)
+BATTERY_THRESHOLD=15            # Low Battery Alert Limit (%)
 ```
 
 ---
 
-## 📄 License
+## 🚀 8. Quick Start & Pairing Guide
 
-MIT — built for educational and hackathon purposes.
+### 8.1 Ingest Node Setup
+```bash
+cd backend
+python -m venv venv
+venv\Scripts\activate
+pip install -r requirements.txt
+cp .env.example .env
+```
+
+### 8.2 Start Services
+Ensure the local GenieX server is running on port `18181`. Then start the backend:
+```bash
+python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+```
+
+### 8.3 Start Frontend Client
+```bash
+cd frontend
+npm install
+npm run start
+```
+Scan the QR code with your mobile device on the **Expo Go** application. 
+
+### 8.4 Network Pairing Process
+To pair the mobile device with the host AI PC:
+1. Connect both the host PC and the mobile phone to the **same Wi-Fi network**.
+2. On the backend terminal, run:
+   ```bash
+   python get_ip.py
+   ```
+3. Copy the printed IP address and type it into the Settings screen on the mobile app. The WebSocket status dots will instantly turn green.

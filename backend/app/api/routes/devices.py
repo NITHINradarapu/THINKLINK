@@ -77,12 +77,16 @@ def get_device_history(
 
     )
 
-    return {
-
-        "device_id": device_id,
-
-        "history_count": len(history),
-
-        "history": history,
-
-    }
+    # Serialize to dicts — frontend expects 'timestamp' field
+    return [
+        {
+            "timestamp": record.recorded_at.isoformat() if record.recorded_at else None,
+            "temperature": record.temperature,
+            "humidity": record.humidity,
+            "gas_level": record.gas_level,
+            "smoke_detected": record.smoke_detected,
+            "battery_level": record.battery_level,
+            "vibration": record.vibration,
+        }
+        for record in history
+    ]

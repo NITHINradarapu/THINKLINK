@@ -29,7 +29,7 @@ try:
         
         # Every 10th reading (30 seconds), trigger a critical anomaly to automatically invoke the AI Swarm!
         if step % 10 == 0:
-            print("\n🚨 [Simulation] Triggering CRITICAL GAS & SMOKE Anomaly!")
+            print("\n[!!] [Simulation] Triggering CRITICAL GAS & SMOKE Anomaly!")
             gas_reading = 650.0
             smoke_reading = True
             temp_reading = 82.4

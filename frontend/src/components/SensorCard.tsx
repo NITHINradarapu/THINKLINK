@@ -30,16 +30,32 @@ export default function SensorCard({
   let statusColor = COLORS.success;
   let statusGlow = COLORS.successGlow;
 
-  if (value >= dangerLimit) {
-    status = 'danger';
-    statusText = 'CRITICAL';
-    statusColor = COLORS.danger;
-    statusGlow = COLORS.dangerGlow;
-  } else if (value >= warningLimit) {
-    status = 'warning';
-    statusText = 'WARNING';
-    statusColor = COLORS.warning;
-    statusGlow = COLORS.warningGlow;
+  const isInverted = title.toLowerCase().includes('battery');
+
+  if (isInverted) {
+    if (value <= dangerLimit) {
+      status = 'danger';
+      statusText = 'CRITICAL';
+      statusColor = COLORS.danger;
+      statusGlow = COLORS.dangerGlow;
+    } else if (value <= warningLimit) {
+      status = 'warning';
+      statusText = 'WARNING';
+      statusColor = COLORS.warning;
+      statusGlow = COLORS.warningGlow;
+    }
+  } else {
+    if (value >= dangerLimit) {
+      status = 'danger';
+      statusText = 'CRITICAL';
+      statusColor = COLORS.danger;
+      statusGlow = COLORS.dangerGlow;
+    } else if (value >= warningLimit) {
+      status = 'warning';
+      statusText = 'WARNING';
+      statusColor = COLORS.warning;
+      statusGlow = COLORS.warningGlow;
+    }
   }
 
   // Calculate percentage for progress bar

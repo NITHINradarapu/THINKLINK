@@ -4,7 +4,7 @@ Device Service
 Business logic for device management.
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
@@ -44,7 +44,7 @@ class DeviceService:
                 smoke_detected=telemetry.smoke_detected,
                 battery_level=telemetry.battery_level,
                 is_online=True,
-                last_seen=datetime.utcnow(),
+                last_seen=datetime.now(timezone.utc),
             )
 
             return self.repository.create(
@@ -58,7 +58,7 @@ class DeviceService:
         device.smoke_detected = telemetry.smoke_detected
         device.battery_level = telemetry.battery_level
         device.is_online = True
-        device.last_seen = datetime.utcnow()
+        device.last_seen = datetime.now(timezone.utc)
 
         return self.repository.update(
             db,

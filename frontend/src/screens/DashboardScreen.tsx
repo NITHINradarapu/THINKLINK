@@ -1,7 +1,6 @@
 import React, { useState } from 'react';
 import { StyleSheet, Text, View, SafeAreaView, ScrollView, TouchableOpacity, ActivityIndicator } from 'react-native';
 import { COLORS, TYPOGRAPHY, SPACING } from '../theme/theme';
-import ConnectionStatus from '../components/ConnectionStatus';
 import * as Haptics from 'expo-haptics';
 import SensorCard from '../components/SensorCard';
 import SupervisorBanner from '../components/SupervisorBanner';
@@ -15,47 +14,41 @@ export default function DashboardScreen() {
   const [scanResult, setScanResult] = useState<string | null>(null);
   const [scanError, setScanError] = useState<string | null>(null);
 
-  const startGlassesScan = async () => {
+  const startAnalysis = async () => {
+    if (!backendConnected) {
+      setScanError('Backend not connected. Start the FastAPI server and set the correct IP in Settings.');
+      return;
+    }
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
     setIsScanning(true);
     setScanResult(null);
     setScanError(null);
 
-    // Try backend AI analyze endpoint first, fall back to mock
-    if (backendConnected) {
-      try {
-        const telemetryPayload = JSON.stringify({
-          device_id: "TEST-ARDUINO-01",
-          temperature: sensorData.temperature,
-          humidity: sensorData.humidity,
-          gas_level: sensorData.gas,
-          smoke_detected: sensorData.smoke_detected,
-          battery_level: sensorData.battery_level || 90,
-        });
+    try {
+      const telemetryPayload = JSON.stringify({
+        device_id: "ARDUINO-01",
+        temperature: sensorData.temperature,
+        humidity: sensorData.humidity,
+        gas_level: sensorData.gas,
+        smoke_detected: sensorData.smoke_detected,
+        battery_level: sensorData.battery_level || 90,
+        vibration: sensorData.vibration,
+      });
 
-        const result = await analyzeWithAI({ telemetry: telemetryPayload });
-        setIsScanning(false);
-        setScanResult(
-          `[AI Agent] ANALYSIS COMPLETE.\n` +
-          `${result.summary || result.analysis || JSON.stringify(result, null, 2)}`
-        );
-        return;
-      } catch (err: any) {
-        console.log('[DashboardScreen] AI analyze failed, falling back to mock:', err.message);
-        // Fall through to mock
-      }
-    }
-
-    // Mock fallback
-    setTimeout(() => {
+      const result = await analyzeWithAI({ telemetry: telemetryPayload });
       setIsScanning(false);
+      const aiResp = result?.ai_response;
+      const summary = aiResp?.summary || result?.summary || result?.analysis || JSON.stringify(result, null, 2);
+      const risk = aiResp?.overall_risk?.level || aiResp?.risk_level || 'UNKNOWN';
+      const actions = aiResp?.recommended_actions || [];
       setScanResult(
-        '[VLM Agent] SCAN COMPLETE.\n' +
-        'Target: Boiler Feed Valve Joint A-4\n' +
-        'Analysis: Flange shows minor oxidation. Bolt torque matches safety baseline. No steam leaks detected.\n' +
-        'Safety Status: NOMINAL (96% safety score)'
+        `[AI Agent] Risk: ${risk}\n${summary}` +
+        (actions.length > 0 ? `\n\nActions:\n${actions.map((a: string, i: number) => `${i+1}. ${a}`).join('\n')}` : '')
       );
-    }, 2500);
+    } catch (err: any) {
+      setIsScanning(false);
+      setScanError(`AI analysis failed: ${err.message || 'Unknown error'}`);
+    }
   };
 
   return (
@@ -66,8 +59,6 @@ export default function DashboardScreen() {
           <Text style={TYPOGRAPHY.caption}>INDUSTRIAL AI ENVIRONMENT MONITOR</Text>
         </View>
 
-        <ConnectionStatus connections={connections} />
-        
         <SupervisorBanner status={aiStatus.status} latestEvent={aiStatus.latestEvent} />
 
         <Text style={styles.sectionTitle}>Edge Sensor Telemetry</Text>
@@ -105,7 +96,6 @@ export default function DashboardScreen() {
           dangerLimit={3.0}
         />
 
-        {/* Humidity & Battery — new fields from backend */}
         <SensorCard
           title="Ambient Humidity"
           value={sensorData.humidity}
@@ -117,8 +107,51 @@ export default function DashboardScreen() {
           dangerLimit={95}
         />
 
+        <SensorCard
+          title="Battery Level"
+          value={sensorData.battery_level}
+          unit="%"
+          icon="battery-half-outline"
+          minVal={0}
+          maxVal={100}
+          warningLimit={25}
+          dangerLimit={10}
+        />
+
+        {/* Smoke Detected Alert Card */}
+        <View style={styles.smokeCard}>
+          <View style={styles.smokeRow}>
+            <Ionicons
+              name={sensorData.smoke_detected ? 'warning' : 'checkmark-circle-outline'}
+              size={22}
+              color={sensorData.smoke_detected ? COLORS.danger : COLORS.success}
+            />
+            <View style={{ flex: 1, marginLeft: 10 }}>
+              <Text style={styles.smokeTitle}>Smoke / Fire Detection</Text>
+              <Text style={[
+                styles.smokeStatus,
+                { color: sensorData.smoke_detected ? COLORS.danger : COLORS.success }
+              ]}>
+                {sensorData.smoke_detected ? '⚠ SMOKE DETECTED — EVACUATE' : '✓ CLEAR — No Smoke Detected'}
+              </Text>
+            </View>
+            <View style={[
+              styles.smokeBadge,
+              { backgroundColor: sensorData.smoke_detected ? COLORS.dangerGlow : COLORS.successGlow,
+                borderColor: sensorData.smoke_detected ? COLORS.danger : COLORS.success }
+            ]}>
+              <Text style={[
+                styles.smokeBadgeText,
+                { color: sensorData.smoke_detected ? COLORS.danger : COLORS.success }
+              ]}>
+                {sensorData.smoke_detected ? 'ALERT' : 'OK'}
+              </Text>
+            </View>
+          </View>
+        </View>
+
         {/* Wow Factor: Meta AI Glasses vision link */}
-        <Text style={styles.sectionTitle}>Meta AI Glasses Feed</Text>
+        <Text style={styles.sectionTitle}>AI Diagnostics Console</Text>
         <View style={styles.glassesCard}>
           <View style={styles.glassesHeader}>
             <View style={styles.glassesBadge}>
@@ -142,39 +175,34 @@ export default function DashboardScreen() {
           {isScanning ? (
             <View style={styles.scanProgress}>
               <ActivityIndicator size="small" color={COLORS.primary} />
-              <Text style={styles.scanText}>
-                {backendConnected
-                  ? 'Sending to AI backend for multimodal analysis...'
-                  : 'Acquiring feed & running edge visual diagnosis...'
-                }
-              </Text>
+              <Text style={styles.scanText}>Sending telemetry to AI backend for multimodal analysis...</Text>
             </View>
           ) : scanResult ? (
             <View style={styles.resultContainer}>
               <View style={styles.terminalBox}>
-                <Text style={styles.terminalPrompt}>$ vlm_agent_vision: </Text>
+                <Text style={styles.terminalPrompt}>$ ai_swarm_agent: </Text>
                 <Text style={styles.terminalText}>{scanResult}</Text>
               </View>
-              <TouchableOpacity style={styles.scanButton} onPress={startGlassesScan}>
-                <Text style={styles.scanButtonText}>SCAN AGAIN</Text>
+              <TouchableOpacity style={styles.scanButton} onPress={startAnalysis}>
+                <Text style={styles.scanButtonText}>RE-ANALYZE</Text>
               </TouchableOpacity>
             </View>
           ) : (
             <View style={styles.initContainer}>
               <Text style={styles.initText}>
-                {backendConnected 
-                  ? 'Connected to AI backend. Request a multimodal analysis combining telemetry data with visual inspection.'
-                  : 'Meta AI Glasses are connected. You can request a real-time visual inspection report of the nearest equipment.'
+                {backendConnected
+                  ? 'Backend connected. Run a live AI analysis using current Arduino telemetry data.'
+                  : 'Backend offline. Connect to the FastAPI server in Settings to enable AI analysis.'
                 }
               </Text>
-              <TouchableOpacity 
-                style={[styles.scanButton, !connections.glasses && !backendConnected && styles.disabledButton]} 
-                onPress={startGlassesScan}
-                disabled={!connections.glasses && !backendConnected}
+              <TouchableOpacity
+                style={[styles.scanButton, !backendConnected && styles.disabledButton]}
+                onPress={startAnalysis}
+                disabled={!backendConnected}
               >
-                <Ionicons name="camera-outline" size={16} color="#FFFFFF" style={{ marginRight: 6 }} />
+                <Ionicons name="analytics-outline" size={16} color="#FFFFFF" style={{ marginRight: 6 }} />
                 <Text style={styles.scanButtonText}>
-                  {backendConnected ? 'RUN AI ANALYSIS' : 'REQUEST GLASSES VISION SCAN'}
+                  {backendConnected ? 'RUN AI ANALYSIS' : 'BACKEND REQUIRED'}
                 </Text>
               </TouchableOpacity>
             </View>
@@ -209,6 +237,40 @@ const styles = StyleSheet.create({
     color: COLORS.textPrimary,
     fontWeight: 'bold',
     marginTop: SPACING.sm,
+  },
+  smokeCard: {
+    backgroundColor: COLORS.surface,
+    borderRadius: 12,
+    padding: SPACING.md,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    marginBottom: SPACING.md,
+  },
+  smokeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  smokeTitle: {
+    fontSize: 13,
+    fontWeight: 'bold',
+    color: COLORS.textPrimary,
+    marginBottom: 2,
+  },
+  smokeStatus: {
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  smokeBadge: {
+    borderWidth: 1,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+    marginLeft: 8,
+  },
+  smokeBadgeText: {
+    fontSize: 10,
+    fontWeight: 'bold',
+    letterSpacing: 0.5,
   },
   glassesCard: {
     backgroundColor: COLORS.surface,

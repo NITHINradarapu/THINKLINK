@@ -13,6 +13,7 @@ export interface TelemetryRequest {
   gas_level: number;
   smoke_detected: boolean;
   battery_level: number; // 0–100
+  vibration?: number;    // optional – 0.0 to 1.0+
 }
 
 /** POST /telemetry/ — response body */
@@ -187,4 +188,14 @@ export interface ReportResponse {
   summary: string;
   notification_sent: boolean;
 }
+
+// ─── Visual Q&A ───────────────────────────────────────────────
+
+export interface AskAIResponse {
+  success: boolean;
+  answer: string;
+  caption: string;
+  question: string;
+}
+
 

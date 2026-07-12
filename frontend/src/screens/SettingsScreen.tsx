@@ -4,12 +4,11 @@ import { Ionicons } from '@expo/vector-icons';
 import { COLORS, TYPOGRAPHY, SPACING } from '../theme/theme';
 import { useTelemetry } from '../context/TelemetryContext';
 import * as Haptics from 'expo-haptics';
+import { api } from '../services/api';
 
 export default function SettingsScreen() {
   const {
-    serverIp,
     apiBaseUrl,
-    updateServerIp,
     updateApiBaseUrl,
     socketConnected,
     backendConnected,
@@ -17,17 +16,9 @@ export default function SettingsScreen() {
     checkBackendHealth,
   } = useTelemetry();
 
-  const [socketIpInput, setSocketIpInput] = useState(serverIp);
   const [apiUrlInput, setApiUrlInput] = useState(apiBaseUrl);
   const [loadingAction, setLoadingAction] = useState<string | null>(null);
   const [healthCheckResult, setHealthCheckResult] = useState<string | null>(null);
-
-  // Save Socket.IO URL
-  const handleSaveSocketIp = () => {
-    Haptics.selectionAsync().catch(() => {});
-    updateServerIp(socketIpInput);
-    Alert.alert('Socket.IO Updated', `Connecting to socket server at ${socketIpInput}...`);
-  };
 
   // Save Backend API URL
   const handleSaveApiUrl = () => {
@@ -49,6 +40,39 @@ export default function SettingsScreen() {
     } finally {
       setLoadingAction(null);
     }
+  };
+
+  // Wipe backend database (Incidents, logs, and telemetry histories)
+  const handleWipeDatabase = () => {
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning).catch(() => {});
+    Alert.alert(
+      'Wipe Database',
+      'Are you absolutely sure you want to delete all incidents, action logs, and telemetry history? This action is irreversible.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Wipe Database',
+          style: 'destructive',
+          onPress: async () => {
+            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy).catch(() => {});
+            setLoadingAction('wipe_db');
+            try {
+              const res = await api.clearDatabase();
+              if (res.success) {
+                Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
+                Alert.alert('Database Wiped', 'All incidents and logs have been deleted successfully.');
+              } else {
+                Alert.alert('Error', res.message || 'Failed to wipe database.');
+              }
+            } catch (err: any) {
+              Alert.alert('Connection Error', `Failed to contact backend to clear database: ${err.message}`);
+            } finally {
+              setLoadingAction(null);
+            }
+          }
+        }
+      ]
+    );
   };
 
   // Helper to trigger backend states (demo simulation)
@@ -147,41 +171,6 @@ export default function SettingsScreen() {
           )}
         </View>
 
-        {/* ── Socket.IO Connection ─────────────────────────── */}
-        <View style={styles.card}>
-          <View style={styles.cardTitleRow}>
-            <Ionicons name="flash-outline" size={20} color={COLORS.info} />
-            <Text style={styles.cardTitle}>Socket.IO Real-Time Server</Text>
-          </View>
-          
-          <View style={styles.statusRow}>
-            <Text style={TYPOGRAPHY.bodySecondary}>Status: </Text>
-            <View style={[styles.statusDot, { backgroundColor: socketConnected ? COLORS.success : COLORS.danger }]} />
-            <Text style={[styles.statusText, { color: socketConnected ? COLORS.success : COLORS.danger }]}>
-              {socketConnected ? 'CONNECTED' : 'DISCONNECTED'}
-            </Text>
-          </View>
-
-          <Text style={styles.inputLabel}>Socket.IO Server URL</Text>
-          <View style={styles.inputRow}>
-            <TextInput
-              style={styles.textInput}
-              value={socketIpInput}
-              onChangeText={setSocketIpInput}
-              placeholder="e.g. http://192.168.1.100:3000"
-              placeholderTextColor={COLORS.textTertiary}
-              autoCapitalize="none"
-              autoCorrect={false}
-            />
-            <TouchableOpacity style={[styles.saveButton, { backgroundColor: COLORS.info }]} onPress={handleSaveSocketIp}>
-              <Text style={styles.saveButtonText}>SET</Text>
-            </TouchableOpacity>
-          </View>
-          <Text style={styles.helperText}>
-            Real-time telemetry streaming via Socket.IO. For local dev, use the mock server on port 3000.
-          </Text>
-        </View>
-
         {/* ── Connection Architecture Info ──────────────────── */}
         <View style={styles.archCard}>
           <Text style={styles.archTitle}>Connection Architecture</Text>
@@ -195,9 +184,9 @@ export default function SettingsScreen() {
               <Ionicons name="add" size={14} color={COLORS.textTertiary} />
             </View>
             <View style={styles.archItem}>
-              <Ionicons name="flash" size={18} color={COLORS.info} />
-              <Text style={styles.archLabel}>Socket.IO</Text>
-              <Text style={styles.archDesc}>Real-time telemetry, actuator control</Text>
+              <Ionicons name="git-network-outline" size={18} color={COLORS.success} />
+              <Text style={styles.archLabel}>WebSocket</Text>
+              <Text style={styles.archDesc}>Real-time telemetry, actuator control (port 8000)</Text>
             </View>
           </View>
         </View>
@@ -216,6 +205,28 @@ export default function SettingsScreen() {
             }}
           >
             <Text style={[styles.saveButtonText, { color: COLORS.textPrimary }]}>LAUNCH ONBOARDING SLIDES</Text>
+          </TouchableOpacity>
+        </View>
+
+        {/* Database Management Card */}
+        <View style={styles.card}>
+          <View style={styles.cardTitleRow}>
+            <Ionicons name="trash-outline" size={20} color={COLORS.danger} />
+            <Text style={styles.cardTitle}>Database Management</Text>
+          </View>
+          <Text style={TYPOGRAPHY.bodySecondary}>
+            Wipe all stored telemetry records, incident reports, action logs, and device history from the Edge database.
+          </Text>
+          <TouchableOpacity 
+            style={[styles.saveButton, { marginTop: SPACING.md, backgroundColor: COLORS.dangerGlow, borderWidth: 1, borderColor: COLORS.danger }]} 
+            onPress={handleWipeDatabase}
+            disabled={loadingAction !== null}
+          >
+            {loadingAction === 'wipe_db' ? (
+              <ActivityIndicator size="small" color={COLORS.danger} />
+            ) : (
+              <Text style={[styles.saveButtonText, { color: COLORS.danger }]}>WIPE DATABASE</Text>
+            )}
           </TouchableOpacity>
         </View>
 

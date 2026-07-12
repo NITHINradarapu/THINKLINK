@@ -4,7 +4,7 @@ Device History Model
 Stores every telemetry packet received from devices.
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import (
     Boolean,
@@ -76,12 +76,18 @@ class DeviceHistory(Base):
         nullable=False,
     )
 
+    vibration: Mapped[float] = mapped_column(
+        Float,
+        default=0.0,
+        nullable=False,
+    )
+
     # ======================================================
     # Timestamp
     # ======================================================
 
     recorded_at: Mapped[datetime] = mapped_column(
-        DateTime,
-        default=datetime.utcnow,
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
         nullable=False,
     )

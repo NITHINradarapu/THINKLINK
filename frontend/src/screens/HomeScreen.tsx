@@ -42,6 +42,10 @@ export default function HomeScreen() {
       if (backendConnected) {
         const details = await getDeviceDetails(deviceId);
         const historyList = await getDeviceHistoryList(deviceId);
+        // Override DB status with real-time serial connection status
+        if (details) {
+          details.status = connections.arduino ? 'online' : 'offline';
+        }
         setDeviceDetails(details);
         setDeviceHistory(historyList);
       } else {
@@ -102,25 +106,23 @@ export default function HomeScreen() {
     setRefreshing(false);
   };
 
-  // Calculate System Health Score — prefer backend data, fallback to local logic
-  let healthScore = dashboardSummary?.system_health ?? 98;
+  // Calculate System Health — UP when safe, DOWN when incident active
+  let healthIsUp = true;
   let statusText = 'SYSTEM NOMINAL';
   let statusColor = COLORS.success;
   let statusGlow = COLORS.successGlow;
 
   if (activeIncident) {
+    healthIsUp = false;
     if (activeIncident.riskLevel === 'HIGH') {
-      healthScore = dashboardSummary?.system_health ?? 42;
       statusText = 'CRITICAL ALARM ACTIVE';
       statusColor = COLORS.danger;
       statusGlow = COLORS.dangerGlow;
     } else if (activeIncident.riskLevel === 'WARNING') {
-      healthScore = dashboardSummary?.system_health ?? 74;
       statusText = 'WARNING DETECTED';
       statusColor = COLORS.warning;
       statusGlow = COLORS.warningGlow;
     } else {
-      healthScore = dashboardSummary?.system_health ?? 88;
       statusText = 'ADVISORY ACTIVE';
       statusColor = COLORS.info;
       statusGlow = COLORS.infoGlow;
@@ -128,14 +130,21 @@ export default function HomeScreen() {
   } else if (dashboardSummary?.risk_level) {
     const backendRisk = dashboardSummary.risk_level.toUpperCase();
     if (backendRisk === 'HIGH' || backendRisk === 'CRITICAL') {
+      healthIsUp = false;
       statusText = 'HIGH RISK DETECTED';
       statusColor = COLORS.danger;
       statusGlow = COLORS.dangerGlow;
     } else if (backendRisk === 'MEDIUM' || backendRisk === 'WARNING') {
+      healthIsUp = false;
       statusText = 'WARNING LEVEL';
       statusColor = COLORS.warning;
       statusGlow = COLORS.warningGlow;
     }
+  } else if (!backendConnected) {
+    healthIsUp = false;
+    statusText = 'BACKEND OFFLINE';
+    statusColor = COLORS.danger;
+    statusGlow = COLORS.dangerGlow;
   }
 
   // Count active device links
@@ -162,15 +171,6 @@ export default function HomeScreen() {
             <Text style={styles.headerSubtitle}>INDUSTRIAL MONITOR</Text>
             <Text style={TYPOGRAPHY.h1}>THINKLINK PORTAL</Text>
           </View>
-          <TouchableOpacity 
-            style={styles.settingsHeaderBtn} 
-            onPress={() => {
-              Haptics.selectionAsync().catch(() => {});
-              navigation.navigate('Settings');
-            }}
-          >
-            <Ionicons name="settings-outline" size={24} color={COLORS.textPrimary} />
-          </TouchableOpacity>
         </View>
 
         {/* Backend Connection Status Badge */}
@@ -209,8 +209,14 @@ export default function HomeScreen() {
                 ]} 
               />
               <View style={[styles.dialInner, { borderColor: statusColor }]}>
-                <Text style={[styles.dialNumber, { color: statusColor }]}>{Math.round(healthScore)}%</Text>
-                <Text style={styles.dialLabel}>HEALTH</Text>
+                <Ionicons 
+                  name={healthIsUp ? 'arrow-up' : 'arrow-down'} 
+                  size={32} 
+                  color={statusColor} 
+                />
+                <Text style={[styles.dialLabel, { color: statusColor, fontSize: 11, fontWeight: 'bold' }]}>
+                  {healthIsUp ? 'UP' : 'DOWN'}
+                </Text>
               </View>
             </View>
 
@@ -257,17 +263,17 @@ export default function HomeScreen() {
         </View>
 
         <View style={styles.linkGrid}>
-          {/* AI PC Card */}
-          <View style={[styles.linkCard, connections.pc && { borderColor: COLORS.primary + '80' }]}>
-            <View style={[styles.linkIconBg, { backgroundColor: connections.pc ? COLORS.primary + '15' : COLORS.surfaceLight }]}>
-              <Ionicons name="desktop-outline" size={20} color={connections.pc ? COLORS.primary : COLORS.textTertiary} />
+          {/* AI PC Card — use backendConnected as source of truth */}
+          <View style={[styles.linkCard, backendConnected && { borderColor: COLORS.primary + '80' }]}>
+            <View style={[styles.linkIconBg, { backgroundColor: backendConnected ? COLORS.primary + '15' : COLORS.surfaceLight }]}>
+              <Ionicons name="desktop-outline" size={20} color={backendConnected ? COLORS.primary : COLORS.textTertiary} />
             </View>
             <Text style={styles.linkLabel}>Snapdragon AI PC</Text>
-            <Text style={styles.linkSublabel}>{connections.pc ? 'Swarm Engine Active' : 'Disconnected'}</Text>
+            <Text style={styles.linkSublabel}>{backendConnected ? 'Swarm Engine Active' : 'Disconnected'}</Text>
             <View style={styles.linkStatusRow}>
-              <View style={[styles.dotSmall, { backgroundColor: connections.pc ? COLORS.success : COLORS.danger }]} />
-              <Text style={[styles.linkStatusText, { color: connections.pc ? COLORS.success : COLORS.danger }]}>
-                {connections.pc ? 'Syncing' : 'Offline'}
+              <View style={[styles.dotSmall, { backgroundColor: backendConnected ? COLORS.success : COLORS.danger }]} />
+              <Text style={[styles.linkStatusText, { color: backendConnected ? COLORS.success : COLORS.danger }]}>
+                {backendConnected ? 'Syncing' : 'Offline'}
               </Text>
             </View>
           </View>
@@ -306,78 +312,25 @@ export default function HomeScreen() {
           </View>
         </View>
 
-        {/* Live Telemetry Glance */}
-        <View style={styles.sectionHeaderRow}>
-          <Text style={styles.sectionTitle}>Environmental Telemetry</Text>
-          <TouchableOpacity onPress={() => {
+        {/* Sensor Telemetry Quick Link */}
+        <TouchableOpacity 
+          style={styles.sensorQuickLink}
+          onPress={() => {
             Haptics.selectionAsync().catch(() => {});
             navigation.navigate('Sensors');
-          }}>
-            <Text style={styles.sectionActionText}>VIEW DETAILS →</Text>
-          </TouchableOpacity>
-        </View>
-
-        <View style={styles.sensorGrid}>
-          {/* Temperature */}
-          <View style={styles.sensorMiniCard}>
-            <View style={styles.sensorMiniHeader}>
-              <Ionicons name="thermometer-outline" size={16} color={COLORS.primary} />
-              <Text style={styles.sensorMiniTitle}>TEMP</Text>
+          }}
+        >
+          <View style={styles.sensorQuickLinkRow}>
+            <View style={[styles.launchIconWrapper, { backgroundColor: COLORS.success + '15' }]}>
+              <Ionicons name="speedometer-outline" size={24} color={COLORS.success} />
             </View>
-            <Text style={styles.sensorMiniVal}>{sensorData.temperature.toFixed(1)}°C</Text>
-            <View style={styles.sensorProgressBarBg}>
-              <View 
-                style={[
-                  styles.sensorProgressBar, 
-                  { 
-                    width: `${Math.min(100, (sensorData.temperature / 80) * 100)}%`,
-                    backgroundColor: sensorData.temperature > 45 ? COLORS.danger : COLORS.primary 
-                  }
-                ]} 
-              />
+            <View style={{ flex: 1 }}>
+              <Text style={styles.launchTitle}>Live Sensor Telemetry</Text>
+              <Text style={styles.launchDesc}>View real-time gauges for temperature, gas, vibration, humidity & smoke</Text>
             </View>
+            <Ionicons name="chevron-forward" size={18} color={COLORS.textTertiary} />
           </View>
-
-          {/* Gas */}
-          <View style={styles.sensorMiniCard}>
-            <View style={styles.sensorMiniHeader}>
-              <Ionicons name="flame-outline" size={16} color={COLORS.warning} />
-              <Text style={styles.sensorMiniTitle}>GAS</Text>
-            </View>
-            <Text style={styles.sensorMiniVal}>{sensorData.gas.toFixed(0)} PPM</Text>
-            <View style={styles.sensorProgressBarBg}>
-              <View 
-                style={[
-                  styles.sensorProgressBar, 
-                  { 
-                    width: `${Math.min(100, (sensorData.gas / 1000) * 100)}%`,
-                    backgroundColor: sensorData.gas > 300 ? COLORS.danger : COLORS.warning 
-                  }
-                ]} 
-              />
-            </View>
-          </View>
-
-          {/* Vibration */}
-          <View style={styles.sensorMiniCard}>
-            <View style={styles.sensorMiniHeader}>
-              <Ionicons name="pulse-outline" size={16} color={COLORS.info} />
-              <Text style={styles.sensorMiniTitle}>VIB</Text>
-            </View>
-            <Text style={styles.sensorMiniVal}>{sensorData.vibration.toFixed(2)} G</Text>
-            <View style={styles.sensorProgressBarBg}>
-              <View 
-                style={[
-                  styles.sensorProgressBar, 
-                  { 
-                    width: `${Math.min(100, (sensorData.vibration / 5) * 100)}%`,
-                    backgroundColor: sensorData.vibration > 1.5 ? COLORS.danger : COLORS.info 
-                  }
-                ]} 
-              />
-            </View>
-          </View>
-        </View>
+        </TouchableOpacity>
 
         {/* Quick Launch Panel */}
         <Text style={styles.sectionTitle}>Operator Command Deck</Text>
@@ -560,11 +513,24 @@ const styles = StyleSheet.create({
     width: 44,
     height: 44,
     borderRadius: 22,
-    backgroundColor: COLORS.surface,
+    backgroundColor: COLORS.surfaceLight,
+    justifyContent: 'center',
+    alignItems: 'center',
     borderWidth: 1,
     borderColor: COLORS.border,
+  },
+  sensorQuickLink: {
+    backgroundColor: COLORS.surface,
+    borderRadius: 14,
+    padding: SPACING.md,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    marginBottom: SPACING.md,
+  },
+  sensorQuickLinkRow: {
+    flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
+    gap: SPACING.md,
   },
   connectionBadgeRow: {
     flexDirection: 'row',
@@ -952,13 +918,13 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     color: COLORS.textPrimary,
   },
-  statusBadge: {
+  deviceModalStatusBadge: {
     borderWidth: 1,
     paddingHorizontal: 8,
     paddingVertical: 3,
     borderRadius: 4,
   },
-  statusBadgeText: {
+  deviceModalStatusBadgeText: {
     fontSize: 9,
     fontWeight: 'bold',
   },

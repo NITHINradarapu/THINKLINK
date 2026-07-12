@@ -34,7 +34,8 @@ export default function EmergencyModal({ onViewReport }: EmergencyModalProps) {
     }
   }, [activeIncident, flashAnim]);
 
-  if (!activeIncident) return null;
+  // Only show emergency popup for HIGH risk — MEDIUM/INFO are logged silently in Incidents tab
+  if (!activeIncident || activeIncident.riskLevel !== 'HIGH') return null;
 
   // Determine display values — handle both backend and mock formats
   const riskLevel = activeIncident.riskLevel || 'WARNING';

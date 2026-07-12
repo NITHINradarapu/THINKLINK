@@ -4,10 +4,10 @@ Health Service
 Provides overall backend health information.
 """
 
-import requests
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.config.settings import settings
 from app.enums import IncidentStatus
 from app.models import Device, Incident
 from app.utils.logger import logger
@@ -17,11 +17,10 @@ class HealthService:
 
     def __init__(self):
 
-        # TODO:
-        # Move to .env later
-        self.ai_health_url = "http://localhost:9000/health"
+        # Use AI service URL from settings (.env)
+        self.ai_health_url = settings.ai_service_url.replace("/api/generate", "/health")
 
-        self.ai_timeout = 3
+        self.ai_timeout = settings.ai_timeout
 
     # ======================================================
     # Database Health

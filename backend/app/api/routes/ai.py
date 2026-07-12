@@ -167,7 +167,7 @@ async def analyze(
             db_telemetry = telemetry_data
             if not db_telemetry:
                 db_telemetry = TelemetryRequest(
-                    device_id=telemetry_data.device_id if telemetry_data else "WORKER-REPORT",
+                    device_id="WORKER-REPORT",
                     temperature=0.0,
                     humidity=0.0,
                     gas_level=0.0,

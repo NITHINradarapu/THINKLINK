@@ -26,14 +26,15 @@ import type {
   MonitorCheckResponse,
   MetricsResponse,
   ReportResponse,
+  AskAIResponse,
 } from './types';
 
 // ─── Base URL Management ─────────────────────────────────────
 
 const DEFAULT_API_BASE_URL =
   Platform.OS === 'android'
-    ? 'http://10.48.65.93:8000'
-    : 'http://localhost:8000';
+    ? 'http://10.91.48.73:8000'  // PC LAN IP for physical Android devices over WiFi
+    : 'http://localhost:8000'; // iOS / Web
 
 let _baseUrl: string = DEFAULT_API_BASE_URL;
 
@@ -241,10 +242,15 @@ export const api = {
   getDevice: (id: string) =>
     request<DeviceInfo>(`/devices/${encodeURIComponent(id)}`),
 
-  getDeviceHistory: (id: string) =>
-    request<DeviceHistoryEntry[]>(
+  getDeviceHistory: async (id: string): Promise<DeviceHistoryEntry[]> => {
+    const result = await request<any>(
       `/devices/${encodeURIComponent(id)}/history`,
-    ),
+    );
+    // Backend returns array directly; guard against legacy wrapped response
+    if (Array.isArray(result)) return result as DeviceHistoryEntry[];
+    if (result && Array.isArray(result.history)) return result.history as DeviceHistoryEntry[];
+    return [];
+  },
 
   // ── Notifications ───────────────────────────────────────
   getLatestNotification: () =>
@@ -259,6 +265,26 @@ export const api = {
 
   // ── Metrics ─────────────────────────────────────────────
   getMetrics: () => request<MetricsResponse>('/metrics/'),
+
+  // ── Visual Q&A ──────────────────────────────────────────
+  askAI: async (image: any, question: string): Promise<AskAIResponse> => {
+    const formData = new FormData();
+    formData.append('question', question);
+    formData.append('image', image);
+
+    return request<AskAIResponse>('/ai/ask', {
+      method: 'POST',
+      body: formData,
+      isFormData: true,
+      timeoutMs: 30_000,
+    });
+  },
+
+  // ── Database ────────────────────────────────────────────
+  clearDatabase: () =>
+    request<any>('/database/clear', {
+      method: 'POST',
+    }),
 };
 
 // ─── Data Mapping Utilities ──────────────────────────────────
@@ -272,7 +298,7 @@ export function mapIncidentResponseToReport(inc: IncidentResponse) {
     id: inc.incident_id,
     title: inc.summary,
     riskLevel: inc.risk_level.toUpperCase() as 'HIGH' | 'WARNING' | 'INFO',
-    confidence: inc.confidence_score * 100, // backend 0–1 → frontend 0–100 (if needed)
+    confidence: inc.confidence_score, // backend sends 0–100 directly
     rootCause: inc.ai_reasoning,
     consensus: inc.ai_reasoning, // Backend merges this into ai_reasoning
     actions: inc.recommended_actions.map((text, index) => ({

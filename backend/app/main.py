@@ -16,14 +16,17 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.core.config import settings
+from app.config.settings import settings
 from app.services.websocket_manager import websocket_manager
+
+from app.api.routes.database import router as database_router
 
 # ======================================================
 # API Routes
 # ======================================================
 
 from app.api.routes.ai import router as ai_router
+from app.api.routes.ask import router as ask_router
 from app.api.routes.dashboard import router as dashboard_router
 from app.api.routes.devices import router as devices_router
 from app.api.routes.health import router as health_router
@@ -63,39 +66,57 @@ from app.services.action_executor import action_executor
 SERIAL_PORT = os.getenv("ARDUINO_SERIAL_PORT", "COM3")
 BAUD_RATE = int(os.getenv("ARDUINO_BAUD_RATE", "9600"))
 arduino = None
+buzzer_muted = False
+last_process_time = 0.0
 
-# Keep a local track of clients specifically for hardware broadcasts
-arduino_clients = []
 
 def available_serial_ports():
     ports = [f"{port.device} ({port.description})" for port in list_ports.comports()]
     return ", ".join(ports) if ports else "none detected"
 
-try:
-    arduino = serial.Serial(SERIAL_PORT, BAUD_RATE, timeout=0.1)
-    arduino.reset_input_buffer()
-    print(f"[Hardware] Connected to Arduino on {SERIAL_PORT} at {BAUD_RATE} baud", flush=True)
-    websocket_manager.connections_status["arduino"] = True
-except Exception as e:
-    print(f"[Warning] Could not connect to {SERIAL_PORT}: {e}", flush=True)
-    print("[Warning] Close Arduino IDE Serial Monitor before starting the backend.", flush=True)
-    print(f"[Warning] Available serial ports: {available_serial_ports()}", flush=True)
-    websocket_manager.connections_status["arduino"] = False
-
-def control_system_state(has_errors: bool):
+def connect_arduino():
     global arduino
     if arduino:
         try:
+            arduino.close()
+        except:
+            pass
+        arduino = None
+    try:
+        arduino = serial.Serial(SERIAL_PORT, BAUD_RATE, timeout=0.1)
+        arduino.reset_input_buffer()
+        print(f"[Hardware] Connected to Arduino on {SERIAL_PORT} at {BAUD_RATE} baud", flush=True)
+        websocket_manager.connections_status["arduino"] = True
+        return True
+    except Exception as e:
+        print(f"[Warning] Could not connect to {SERIAL_PORT}: {e}", flush=True)
+        print(f"[Warning] Available serial ports: {available_serial_ports()}", flush=True)
+        websocket_manager.connections_status["arduino"] = False
+        return False
+
+# Initial connection attempt
+connect_arduino()
+
+def control_system_state(has_errors: bool):
+    global arduino, buzzer_muted
+    if arduino:
+        try:
             if has_errors:
-                # Send '1' for buzzer/alert, and 'R' for Red LED (system error)
-                arduino.write(b"1")
+                # If buzzer is manually muted, write b"0" to buzzer (silent) but b"R" to LED (Red warning)
+                if buzzer_muted:
+                    arduino.write(b"0")
+                    print(f"[Hardware] Control System State -> ALERT (Buzzer MUTED/OFF, Red LED ON, Green LED OFF)", flush=True)
+                else:
+                    arduino.write(b"1")
+                    print(f"[Hardware] Control System State -> ALERT (Buzzer ON, Red LED ON, Green LED OFF)", flush=True)
                 arduino.write(b"R")
-                print(f"[Hardware] Control System State -> ALERT (Buzzer ON, Red LED ON, Green LED OFF)", flush=True)
             else:
                 # Send '0' for normal, and 'G' for Green LED (system fine)
                 arduino.write(b"0")
                 arduino.write(b"G")
-                print(f"[Hardware] Control System State -> FINE (Buzzer OFF, Green LED ON, Red LED OFF)", flush=True)
+                # Reset the manual buzzer mute state once everything is nominal
+                buzzer_muted = False
+                print(f"[Hardware] Control System State -> FINE (Buzzer OFF, Green LED ON, Red LED OFF, Mute Reset)", flush=True)
         except Exception as e:
             print(f"[Hardware] Error writing to serial: {e}", flush=True)
 
@@ -163,7 +184,7 @@ async def process_arduino_payload(raw_data: str):
     # Smoke / Flame / Fire / Safety breach binary alerts
     smoke_detected = bool(data_dict.get("smoke_detected", data_dict.get("smoke", False)))
     if (data_dict.get("flame_detected", 0) > 0 or 
-        data_dict.get("safety_breach", 0) > 0 or 
+        data_dict.get("safety_breach", 1) == 0 or 
         data_dict.get("flame", False) or 
         data_dict.get("fire", False)):
         smoke_detected = True
@@ -221,28 +242,26 @@ async def process_arduino_payload(raw_data: str):
     else:
         control_system_state(False)
 
-    # 4. Broadcast the normalized telemetry payload to connected websocket clients
-    broadcast_payload = json.dumps({
+    # 4. Broadcast the normalized telemetry payload to all connected websocket clients via manager
+    telemetry_broadcast = {
         "device_id": device_id,
         "temperature": temp_val,
         "humidity": humidity_val,
         "gas": gas_val,
+        "gas_level": gas_val,
         "smoke_detected": smoke_detected,
         "battery_level": battery_val,
         "vibration": vibration_val,
         "buzzer_active": checker_res["triggered"],
         "led_red_active": checker_res["triggered"]
-    })
-    for client in list(arduino_clients):
-        try:
-            await client.send_text(broadcast_payload)
-        except Exception:
-            pass
+    }
+    await websocket_manager.broadcast_telemetry(telemetry_broadcast)
 
 def read_serial_data_sync():
     """Background thread function to read live Arduino telemetry synchronously without blocking FastAPI's event loop"""
     import json
     from app.utils import loop as loop_module
+    global last_process_time
 
     print("[Hardware Thread] Serial reader thread started.", flush=True)
     
@@ -255,16 +274,18 @@ def read_serial_data_sync():
             if arduino.in_waiting > 0:
                 raw_data = arduino.readline().decode("utf-8", errors="replace").strip()
 
-                if raw_data:
-                    print(f"[Arduino Raw Thread] {raw_data}", flush=True)
-
                 if raw_data.startswith("{") and raw_data.endswith("}"):
-                    # Schedule payload processing back onto the main event loop thread-safely
-                    if loop_module.main_loop:
-                        asyncio.run_coroutine_threadsafe(
-                            process_arduino_payload(raw_data),
-                            loop_module.main_loop
-                        )
+                    current_time = time.time()
+                    # Only process telemetry if at least 2.0 seconds have elapsed since the last processing
+                    if current_time - last_process_time >= 2.0:
+                        last_process_time = current_time
+                        print(f"[Arduino Raw Thread] {raw_data}", flush=True)
+                        # Schedule payload processing back onto the main event loop thread-safely
+                        if loop_module.main_loop:
+                            asyncio.run_coroutine_threadsafe(
+                                process_arduino_payload(raw_data),
+                                loop_module.main_loop
+                            )
         except serial.SerialException as e:
             print(f"[Hardware Thread] Serial read error: {e}", flush=True)
             if loop_module.main_loop:
@@ -298,10 +319,14 @@ async def run_device_health_monitor():
                 
                 for d in devices:
                     dev_lower = d.device_id.lower()
+                    # Skip test/simulation devices — they should not affect real connection status
+                    if dev_lower.startswith("test-"):
+                        continue
                     if "arduino" in dev_lower:
-                        arduino_online = d.is_online
+                        # OR logic: online if ANY real Arduino device is online
+                        arduino_online = arduino_online or d.is_online
                     elif "glasses" in dev_lower or "meta" in dev_lower:
-                        glasses_online = d.is_online
+                        glasses_online = glasses_online or d.is_online
                 
                 new_status = {
                     "pc": True,
@@ -395,13 +420,13 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
 
-    title=settings.APP_NAME,
+    title=settings.app_name,
 
-    version=settings.APP_VERSION,
+    version=settings.app_version,
 
     description="AI-powered Industrial Safety Monitoring Backend",
 
-    debug=settings.DEBUG,
+    debug=settings.debug,
 
     lifespan=lifespan,
 
@@ -429,26 +454,58 @@ app.add_middleware(
 async def websocket_endpoint(websocket: WebSocket):
     await websocket_manager.connect(websocket)
     
-    # Add client to our local hardware tracker
-    arduino_clients.append(websocket)
-    
     try:
         while True:
             data = await websocket.receive_text()
             
-            # Let your existing manager handle the standard data
+            # Let websocket_manager handle standard messages (control_actuator etc.)
             await websocket_manager.handle_message(websocket, data)
             
-            # --- ADDED ARDUINO TRIGGER ---
-            # If the dashboard or AI sends '1' or '0', pass it directly to the physical hardware
-            if arduino and data in ["0", "1"]:
-                arduino.write(data.encode('utf-8'))
-                print(f"[Hardware] Sent command {data} to Arduino")
+            # Parse control_actuator message to synchronize with physical Arduino serial commands
+            try:
+                payload = json.loads(data)
+                if payload.get("type") == "control_actuator":
+                    msg_data = payload.get("data", {})
+                    key = msg_data.get("key")
+                    value = bool(msg_data.get("value"))
+                    
+                    global buzzer_muted
+                    if key == "buzzer":
+                        if value:
+                            # User manually enables buzzer: clear muting, sound alarm, turn on Red LED
+                            buzzer_muted = False
+                            if arduino:
+                                arduino.write(b"1")
+                                arduino.write(b"R")
+                            print("[Hardware Override] Buzzer manual ON, Red LED ON", flush=True)
+                        else:
+                            # User manually silences buzzer: set mute flag, write b"0" to Arduino
+                            buzzer_muted = True
+                            if arduino:
+                                arduino.write(b"0")
+                            print("[Hardware Override] Buzzer manual OFF (MUTED)", flush=True)
+                    elif key == "led":
+                        if arduino:
+                            if value:
+                                arduino.write(b"R")
+                            else:
+                                arduino.write(b"G")
+                        print(f"[Hardware Override] LED set to {'RED' if value else 'GREEN'}", flush=True)
+                    elif key == "relay":
+                        if arduino:
+                            if value:
+                                arduino.write(b"2")
+                            else:
+                                arduino.write(b"3")
+                        print(f"[Hardware Override] Emergency isolation relay set to {'ON (Shutdown)' if value else 'OFF (Nominal)'}", flush=True)
+            except Exception as e:
+                # Fallback to check raw legacy data bytes
+                if arduino and data in ["0", "1"]:
+                    arduino.write(data.encode('utf-8'))
+                    print(f"[Hardware] Sent raw command {data} to Arduino")
                 
     except WebSocketDisconnect:
         websocket_manager.disconnect(websocket)
-        if websocket in arduino_clients:
-            arduino_clients.remove(websocket)
 
 
 
@@ -463,6 +520,7 @@ app.include_router(report_router)
 app.include_router(trigger_router)
 
 app.include_router(ai_router)
+app.include_router(ask_router)
 
 app.include_router(incidents_router)
 
@@ -477,6 +535,7 @@ app.include_router(health_router)
 app.include_router(monitor_router)
 
 app.include_router(metrics_router)
+app.include_router(database_router)
 
 
 # ======================================================
@@ -488,11 +547,11 @@ def root():
 
     return {
 
-        "application": settings.APP_NAME,
+        "application": settings.app_name,
 
-        "version": settings.APP_VERSION,
+        "version": settings.app_version,
 
-        "environment": settings.ENVIRONMENT,
+        "environment": settings.environment,
 
         "status": "Running",
 
@@ -512,13 +571,13 @@ def info():
 
     return {
 
-        "name": settings.APP_NAME,
+        "name": settings.app_name,
 
-        "version": settings.APP_VERSION,
+        "version": settings.app_version,
 
-        "environment": settings.ENVIRONMENT,
+        "environment": settings.environment,
 
-        "debug": settings.DEBUG,
+        "debug": settings.debug,
 
         "api_docs": "/docs",
 
