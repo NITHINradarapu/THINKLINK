@@ -49,7 +49,7 @@ export default function HomeScreen() {
         setDeviceDetails(details);
         setDeviceHistory(historyList);
       } else {
-        // Fallback mock values
+        // Fallback to current live sensor data (no mock logs)
         setDeviceDetails({
           device_id: deviceId,
           device_type: 'ARDUINO',
@@ -60,15 +60,10 @@ export default function HomeScreen() {
             humidity: sensorData.humidity,
             gas_level: sensorData.gas,
             smoke_detected: sensorData.smoke_detected,
-            battery_level: sensorData.battery_level || 98
+            battery_level: sensorData.battery_level || 100
           }
         });
-        setDeviceHistory([
-          { timestamp: new Date(Date.now() - 3000).toISOString(), temperature: 23.4, humidity: 48.0, gas_level: 110.0, smoke_detected: false, battery_level: 98 },
-          { timestamp: new Date(Date.now() - 6000).toISOString(), temperature: 23.5, humidity: 48.2, gas_level: 108.0, smoke_detected: false, battery_level: 98 },
-          { timestamp: new Date(Date.now() - 9000).toISOString(), temperature: 23.5, humidity: 48.1, gas_level: 112.0, smoke_detected: false, battery_level: 98 },
-          { timestamp: new Date(Date.now() - 12000).toISOString(), temperature: 23.6, humidity: 47.9, gas_level: 115.0, smoke_detected: false, battery_level: 98 },
-        ]);
+        setDeviceHistory([]);
       }
     } catch (err) {
       console.error('Failed to load device data:', err);

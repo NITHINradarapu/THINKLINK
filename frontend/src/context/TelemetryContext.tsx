@@ -124,18 +124,7 @@ const DEFAULT_API_URL =
 
 // Helper to pre-populate mock historical telemetry data
 const generateInitialHistory = (): HistoricalReading[] => {
-  const history: HistoricalReading[] = [];
-  const now = new Date();
-  for (let i = 19; i >= 0; i--) {
-    const time = new Date(now.getTime() - i * 3000);
-    history.push({
-      timestamp: time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
-      temperature: 23.5 + Math.random() * 1.5,
-      gas: 110.0 + Math.random() * 15,
-      vibration: 0.08 + Math.random() * 0.04,
-    });
-  }
-  return history;
+  return [];
 };
 
 // ─── Polling interval (ms) ───────────────────────────────────
